@@ -9,9 +9,6 @@ This project is currently a work in progress and represents my initial foray int
 * Rust Language
 * AI and machine learning libraries (TBD)
 
-## Getting Started
-
-To get a local copy up and running, follow these simple steps.
 
 ### Prerequisites
 
