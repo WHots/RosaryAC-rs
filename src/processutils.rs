@@ -1,4 +1,5 @@
-use std::ffi::{c_void, OsString};
+use std::ffi::{c_void, OsStr, OsString};
+use std::borrow::Borrow;
 use std::os::windows::ffi::OsStringExt;
 use windows_sys::Win32::Foundation::{GetLastError, HANDLE, HMODULE};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
@@ -88,33 +89,51 @@ impl ProcessInfo
 
 
         let mut module_info: MODULEINFO = std::mem::zeroed();
-        if GetModuleInformation(self.process_handle, h_module, &mut module_info, std::mem::size_of::<MODULEINFO>() as u32) == 0 {
+
+        if GetModuleInformation(self.process_handle, h_module, &mut module_info, std::mem::size_of::<MODULEINFO>() as u32) == 0
+        {
             return Err(format!("Failed to get module information. Error code: {}", GetLastError()));
         }
 
-        match self.get_module_size() {
+        match self.get_module_size()
+        {
             Ok(size) => Ok((h_module, size)),
             Err(e) => Err(e),
         }
     }
 
 
-    /// Retrieves the file path of the main module of the process.
+    /// Retrieves the file path of the main module of the process as an `OsStr`.
+    ///
+    /// This method fills a provided buffer with the file path and stores the result in an `OsString`.
+    /// It then returns a reference to the `OsStr` slice of the `OsString`.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - A mutable reference to a `Vec<u16>` that will be used to store the file path.
+    /// * `output` - A mutable reference to an `OsString` that will be used to store the file path.
     ///
     /// # Errors
     ///
-    /// Returns an error if the operation fails.
+    /// Returns an error if the operation fails, specifically if the Windows API call to retrieve the module file name fails.
     ///
     /// # Returns
     ///
-    /// * `Result<OsString, &'static str>` - The file path of the main module or an error.
-    pub fn get_process_image_path_ex(&self) -> Result<OsString, &'static str>
+    /// * `Result<&'a OsStr, &'static str>` - A reference to the `OsStr` slice containing the file path of the main module, or an error if the operation fails.
+    pub fn get_process_image_path_ex<'a>(&self, buffer: &'a mut Vec<u16>, output: &'a mut OsString) -> Result<&'a OsStr, &'static str>
     {
 
         const MAX_PATH: usize = 260;
-        let mut buffer = vec![0u16; MAX_PATH];
+        buffer.resize(MAX_PATH, 0);
 
-        let result = unsafe { GetModuleFileNameExW(self.process_handle, 0, buffer.as_mut_ptr(), buffer.len() as u32,) };
+        let result = unsafe {
+            GetModuleFileNameExW(
+                self.process_handle,
+                0,
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+            )
+        };
 
         if result == 0
         {
@@ -124,7 +143,9 @@ impl ProcessInfo
         let len = buffer.iter().position(|&x| x == 0).unwrap_or(buffer.len());
         buffer.truncate(len);
 
-        Ok(OsString::from_wide(&buffer))
+        *output = OsString::from_wide(&buffer);
+
+        Ok(output.as_os_str())
     }
 
 
