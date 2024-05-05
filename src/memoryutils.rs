@@ -19,6 +19,19 @@ macro_rules! to_rva {
 }
 
 
+macro_rules! get_dos_header {
+    ($module_base:expr) => {
+        &*($module_base as *const IMAGE_DOS_HEADER)
+    };
+}
+
+
+macro_rules! get_nt_headers {
+    ($module_base:expr, $dos_header:expr) => {
+        &*($module_base.offset($dos_header.e_lfanew as isize) as *const IMAGE_NT_HEADERS64)
+    };
+}
+
 
 #[repr(C)]
 pub struct SectionInfo
@@ -71,8 +84,8 @@ pub unsafe fn get_section_info(h_process: HANDLE, section_name: &str) -> Vec<Sec
     }
 
     let module_base = module_info.lpBaseOfDll as *const u8;
-    let dos_header = &*(module_base as *const IMAGE_DOS_HEADER);
-    let nt_headers = &*(module_base.offset(dos_header.e_lfanew as isize) as *const IMAGE_NT_HEADERS64);
+    let dos_header = get_dos_header!(module_base);
+    let nt_headers = get_nt_headers!(module_base, dos_header);
 
     let section_headers = slice::from_raw_parts(
         (nt_headers as *const _ as *const u8).offset(mem::size_of::<IMAGE_NT_HEADERS64>() as isize) as *const IMAGE_SECTION_HEADER,
@@ -112,7 +125,7 @@ pub unsafe fn get_section_info(h_process: HANDLE, section_name: &str) -> Vec<Sec
 ///
 /// A `Result` containing `true` if the specified sequence of byte codes is found,
 /// or `false` otherwise. Returns an error string if the read fails, including the base address and size attempted.
-pub fn check_byte_codes(h_process: HANDLE, base_address: *const c_void, size: usize, byte_codes: &[u8]) -> Result<bool, String>
+pub fn compare_bytes(h_process: HANDLE, base_address: *const c_void, size: usize, byte_codes: &[u8]) -> Result<bool, String>
 {
 
     if base_address.is_null() || h_process == 0

@@ -1,8 +1,57 @@
 use std::ffi::{c_void, OsStr, OsString};
-use std::borrow::Borrow;
+//  use std::borrow::Borrow;
+use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
-use windows_sys::Win32::Foundation::{GetLastError, HANDLE, HMODULE};
+use windows_sys::Win32::Foundation::{GetLastError, HANDLE, HMODULE, NTSTATUS};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
+use windows_sys::Win32::System::Threading::{PEB, PROCESS_BASIC_INFORMATION};
+
+
+
+
+
+#[repr(C)]
+pub struct PROCESS_EXTENDED_BASIC_INFORMATION
+{
+    /// The size of the structure, in bytes.
+    Size: usize,
+    /// Basic information about the process.
+    BasicInfo: PROCESS_BASIC_INFORMATION,
+    /// Flags that indicate additional information about the process.
+    Flags: u32,
+}
+
+impl PROCESS_EXTENDED_BASIC_INFORMATION
+{
+    /// Creates a new instance of `PROCESS_EXTENDED_BASIC_INFORMATION` with zero-initialized fields.
+    ///
+    /// # Returns
+    ///
+    /// * `Self` - A new instance of `PROCESS_EXTENDED_BASIC_INFORMATION`.
+    pub fn new() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+
+#[repr(u32)]
+pub enum ProcessInformationClass
+{
+    ProcessBasicInformation = 0,
+}
+
+
+#[link(name = "ntdll")]
+extern "system"
+{
+    fn NtQueryInformationProcess(
+        ProcessHandle: HANDLE,
+        ProcessInformationClass: u32,
+        ProcessInformation: *mut c_void,
+        ProcessInformationLength: u32,
+        ReturnLength: *mut u32,
+    ) -> NTSTATUS;
+}
 
 
 
@@ -51,8 +100,9 @@ impl ProcessInfo
 
         if self.process_handle == 0
         {
-            return Err("Process handle is null.".into());
+            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
         }
+
 
         let mut module_info: MODULEINFO = unsafe { std::mem::zeroed() };
 
@@ -78,6 +128,12 @@ impl ProcessInfo
     /// * `Result<(HMODULE, usize), String>` - The handle and size of the main module or an error.
     pub unsafe fn get_main_module_ex(&self) -> Result<(HMODULE, usize), String>
     {
+
+        if self.process_handle == 0
+        {
+            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
+        }
+
 
         let mut h_module: HMODULE = std::mem::zeroed();
         let mut cb_needed: u32 = 0;
@@ -149,6 +205,175 @@ impl ProcessInfo
     }
 
 
+    /// Retrieves the base address of the Process Environment Block (PEB).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no process is associated or if the query fails.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<*mut PEB, String>` - The base address of the PEB or an error.
+    pub fn get_peb_base_address(&self) -> Result<*mut PEB, String>
+    {
+
+        if self.process_handle == 0
+        {
+            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
+        }
+
+
+        let mut pbi: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        let mut return_length: u32 = 0;
+
+        let status = unsafe {
+            NtQueryInformationProcess(
+                self.process_handle,
+                ProcessInformationClass::ProcessBasicInformation as u32,
+                &mut pbi as *mut _ as *mut _,
+                std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,
+                &mut return_length,
+            )
+        };
+
+        if status != 0
+        {
+            return Err(format!("Failed to query process information. NTSTATUS: {}", status));
+        }
+
+        Ok(pbi.PebBaseAddress)
+    }
+
+
+    /// Determines if the process is running under WOW64.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the process handle is invalid or if the operation fails.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<bool, String>` - `true` if the process is running under WOW64, `false` otherwise, or an error.
+    pub fn is_process64(&self) -> Result<bool, String>
+    {
+
+        if self.process_handle == 0
+        {
+            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
+        }
+
+
+        let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = PROCESS_EXTENDED_BASIC_INFORMATION::new();
+        pebi.Size = size_of::<PROCESS_EXTENDED_BASIC_INFORMATION>();
+
+        let mut return_length: u32 = 0;
+
+        let status = unsafe {
+            NtQueryInformationProcess(
+                self.process_handle,
+                ProcessInformationClass::ProcessBasicInformation as u32,
+                &mut pebi as *mut _ as *mut _,
+                std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,
+                &mut return_length,
+            )
+        };
+
+        if status != 0
+        {
+            return Err(format!("Failed to query process information. NTSTATUS: {}", status));
+        }
+
+        const FLAG_IS_WOW64_PROCESS: u32 = 0x00000002;
+        Ok(pebi.Flags & FLAG_IS_WOW64_PROCESS != 0)
+    }
+
+
+    /// Determines if the process is protected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the process handle is invalid or if the operation fails.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<bool, String>` - `true` if the process is protected, `false` otherwise, or an error.
+    pub fn is_protected_process(&self) -> Result<bool, String>
+    {
+
+        if self.process_handle == 0
+        {
+            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
+        }
+
+
+        let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        pebi.Size = std::mem::size_of::<PROCESS_EXTENDED_BASIC_INFORMATION>();
+
+        let mut return_length: u32 = 0;
+
+        let status = unsafe {
+            NtQueryInformationProcess(
+                self.process_handle,
+                ProcessInformationClass::ProcessBasicInformation as u32,
+                &mut pebi as *mut _ as *mut _,
+                pebi.Size as u32,
+                &mut return_length,
+            )
+        };
+
+        if status != 0
+        {
+            return Err(format!("Failed to query process information. NTSTATUS: {}", status));
+        }
+
+        const FLAG_IS_PROTECTED_PROCESS: u32 = 0x00000001;
+        Ok(pebi.Flags & FLAG_IS_PROTECTED_PROCESS != 0)
+    }
+
+
+    /// Determines if the process is a secure process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the process handle is invalid or if the operation fails.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<bool, String>` - `true` if the process is a secure process, `false` otherwise, or an error.
+    pub fn is_secure_process(&self) -> Result<bool, String>
+    {
+
+        if self.process_handle == 0
+        {
+            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
+        }
+
+
+        let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        pebi.Size = std::mem::size_of::<PROCESS_EXTENDED_BASIC_INFORMATION>();
+
+        let mut return_length: u32 = 0;
+
+        let status = unsafe {
+            NtQueryInformationProcess(
+                self.process_handle,
+                ProcessInformationClass::ProcessBasicInformation as u32,
+                &mut pebi as *mut _ as *mut _,
+                pebi.Size as u32,
+                &mut return_length,
+            )
+        };
+
+        if status != 0
+        {
+            return Err(format!("Failed to query process information. NTSTATUS: {}", status));
+        }
+
+        const FLAG_IS_SECURE_PROCESS: u32 = 0x00000080;
+        Ok(pebi.Flags & FLAG_IS_SECURE_PROCESS != 0)
+    }
+
+
     /// Helper method to retrieve the size of a module given its handle.
     ///
     /// # Arguments
@@ -165,6 +390,11 @@ impl ProcessInfo
     #[inline]
     fn get_module_size(&self) -> Result<usize, String>
     {
+
+        if self.process_handle == 0
+        {
+            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
+        }
 
         let mut module_info: MODULEINFO = unsafe { std::mem::zeroed() };
 
