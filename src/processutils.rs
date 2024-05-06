@@ -86,36 +86,6 @@ impl ProcessInfo
 
 
 
-    /// Retrieves the base address of the main module of the process.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the process handle is invalid or if the operation fails.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<*const c_void, String>` - The base address of the main module or an error.
-    pub fn get_module_base_address_ex(&self) -> Result<*const c_void, String>
-    {
-
-        if self.process_handle == 0
-        {
-            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
-        }
-
-
-        let mut module_info: MODULEINFO = unsafe { std::mem::zeroed() };
-
-        let result = unsafe { GetModuleInformation(self.process_handle, 0, &mut module_info, std::mem::size_of::<MODULEINFO>() as u32,) };
-
-        if result == 0
-        {
-            return Err(format!("Failed to enumerate process modules. Error code: {}", unsafe { GetLastError() },));
-        }
-
-        Ok(module_info.lpBaseOfDll as *const c_void)
-    }
-
 
     /// Retrieves the handle and size of the main module of the process.
     ///
@@ -126,7 +96,7 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<(HMODULE, usize), String>` - The handle and size of the main module or an error.
-    pub unsafe fn get_main_module_ex(&self) -> Result<(HMODULE, usize), String>
+    pub fn get_main_module_ex(&self) -> Result<(*mut c_void, usize), String>
     {
 
         if self.process_handle == 0
@@ -135,27 +105,29 @@ impl ProcessInfo
         }
 
 
-        let mut h_module: HMODULE = std::mem::zeroed();
+        let mut h_module: HMODULE = unsafe { std::mem::zeroed() };
         let mut cb_needed: u32 = 0;
 
-        if EnumProcessModulesEx(self.process_handle, &mut h_module, std::mem::size_of_val(&h_module) as u32, &mut cb_needed, LIST_MODULES_ALL) == 0
+        if unsafe { EnumProcessModulesEx(self.process_handle, &mut h_module, std::mem::size_of_val(&h_module) as u32, &mut cb_needed, LIST_MODULES_ALL) == 0 }
         {
-            return Err(format!("Failed to enumerate process modules. Error code: {}", GetLastError()));
+            unsafe { return Err(format!("Failed to enumerate process modules. Error code: {}", GetLastError())); }
         }
 
+        let mut module_info: MODULEINFO = unsafe { std::mem::zeroed() };
 
-        let mut module_info: MODULEINFO = std::mem::zeroed();
-
-        if GetModuleInformation(self.process_handle, h_module, &mut module_info, std::mem::size_of::<MODULEINFO>() as u32) == 0
+        if unsafe { GetModuleInformation(self.process_handle, h_module, &mut module_info, std::mem::size_of::<MODULEINFO>() as u32) == 0 }
         {
-            return Err(format!("Failed to get module information. Error code: {}", GetLastError()));
+            return Err(format!("Failed to get module information. Error code: {}", unsafe { GetLastError() }));
         }
 
-        match self.get_module_size()
+        let base_address: *mut c_void = module_info.lpBaseOfDll as *mut c_void;
+
+        if base_address.is_null()
         {
-            Ok(size) => Ok((h_module, size)),
-            Err(e) => Err(e),
+            return Err("Module base address is null.".to_string());
         }
+
+        Ok((base_address, module_info.SizeOfImage as usize))
     }
 
 
@@ -371,40 +343,5 @@ impl ProcessInfo
 
         const FLAG_IS_SECURE_PROCESS: u32 = 0x00000080;
         Ok(pebi.Flags & FLAG_IS_SECURE_PROCESS != 0)
-    }
-
-
-    /// Helper method to retrieve the size of a module given its handle.
-    ///
-    /// # Arguments
-    ///
-    /// ...
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the operation fails.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<usize, String>` - The size of the module or an error.
-    #[inline]
-    fn get_module_size(&self) -> Result<usize, String>
-    {
-
-        if self.process_handle == 0
-        {
-            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
-        }
-
-        let mut module_info: MODULEINFO = unsafe { std::mem::zeroed() };
-
-        let result = unsafe { GetModuleInformation(self.process_handle, 0, &mut module_info, std::mem::size_of::<MODULEINFO>() as u32,) };
-
-        if result == 0
-        {
-            return Err(format!("Failed to get module information. Error code: {}", unsafe { GetLastError() },));
-        }
-
-        Ok(module_info.SizeOfImage as usize)
     }
 }

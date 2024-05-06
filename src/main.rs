@@ -19,7 +19,7 @@ const PROCESS_FLAGS: u32 = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ;
 fn main()
 {
 
-    let pid: u32 = 6040;    //  unsafe { GetCurrentProcessId() };
+    let pid: u32 = unsafe { GetCurrentProcessId() };
 
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
     

@@ -11,7 +11,7 @@ use std::ffi::c_void;
 
 
 
-/// Converts an absolute address to a relative virtual address (RVA).
+
 macro_rules! to_rva {
     ($base:expr, $abs_addr:expr) => {
         $abs_addr - $base
@@ -39,13 +39,6 @@ pub struct SectionInfo
     pub name: String,
     pub virtual_address: u32,
     pub size_of_raw_data: u32,
-}
-
-
-pub struct PeValidation
-{
-    pub is_valid_pe: bool,
-    pub nt_headers: Option<IMAGE_NT_HEADERS64>,
 }
 
 
@@ -133,6 +126,7 @@ pub fn compare_bytes(h_process: HANDLE, base_address: *const c_void, size: usize
         return Err(format!("Issue with process handle. Error code: {}", unsafe { GetLastError() }));
     }
 
+
     let mut buffer = vec![0u8; size];
     let mut bytes_read: usize = 0;
 
@@ -151,47 +145,9 @@ pub fn compare_bytes(h_process: HANDLE, base_address: *const c_void, size: usize
         return Err(format!("Failed to read process memory. Error code: {}", unsafe { GetLastError() }));
     }
 
-    let found = memmem(
-        buffer.as_ptr(),
-        buffer.len(),
-        byte_codes.as_ptr(),
-        byte_codes.len(),
-    ).is_some();
+    let found = memmem(buffer.as_ptr(), buffer.len(), byte_codes.as_ptr(), byte_codes.len(), ).is_some();
 
     Ok(found)
-}
-
-
-/// Validates the PE file format of a process.
-///
-/// # Safety
-///
-/// This function is unsafe because it performs raw pointer dereferencing.
-///
-/// # Arguments
-///
-/// * `h_process` - A handle to the process to validate.
-///
-/// # Returns
-///
-/// A `PeValidation` struct containing the validation results.
-pub unsafe fn validate_pe(h_process: HANDLE) -> PeValidation
-{
-
-    let nt_headers_addr = ImageNtHeader(h_process as _);
-
-    if nt_headers_addr.is_null() {
-        return PeValidation { is_valid_pe: false, nt_headers: None, };
-    }
-
-    let nt_headers = &*(nt_headers_addr as *const IMAGE_NT_HEADERS64);
-
-    if nt_headers.Signature != 0x00004550
-    {
-        return PeValidation { is_valid_pe: false, nt_headers: None, };
-    }
-
-    PeValidation { is_valid_pe: true, nt_headers: Some(*nt_headers), }
 }
 
 
