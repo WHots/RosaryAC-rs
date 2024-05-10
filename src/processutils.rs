@@ -349,6 +349,20 @@ impl ProcessInfo
     }
 
 
+    /// Enumerates the threads associated with the process and counts them.
+    ///
+    /// This method creates a snapshot of the threads for the process identified by `self.pid`
+    /// and counts the number of threads owned by the process as well as any anomaly threads.
+    ///
+    /// # Returns
+    ///
+    /// A `HashMap<String, usize>` where the keys are "Owned threads" and "Anomaly threads" (if any),
+    /// and the values are the respective counts of those threads.
+    ///
+    /// # Errors
+    ///
+    /// If the snapshot handle is equal to `windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE`,
+    /// no counts are performed, and an empty `HashMap` is returned.
     pub fn enumerate_threads(&self) -> HashMap<String, usize>
     {
 
@@ -379,6 +393,7 @@ impl ProcessInfo
                         {
                             other_count += 1;
                         }
+
                         if Thread32Next(snapshot, &mut thread_entry) == 0
                         {
                             break;
