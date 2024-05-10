@@ -1,10 +1,13 @@
+use std::collections::HashMap;
 use std::ffi::{c_void, OsStr, OsString};
 //  use std::borrow::Borrow;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
-use windows_sys::Win32::Foundation::{GetLastError, HANDLE, HMODULE, NTSTATUS};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE, NTSTATUS};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
 use windows_sys::Win32::System::Threading::{PEB, PROCESS_BASIC_INFORMATION};
+
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
 
 
 
@@ -343,5 +346,56 @@ impl ProcessInfo
 
         const FLAG_IS_SECURE_PROCESS: u32 = 0x00000080;
         Ok(pebi.Flags & FLAG_IS_SECURE_PROCESS != 0)
+    }
+
+
+    pub fn enumerate_threads(&self) -> HashMap<String, usize>
+    {
+
+        let mut counts = HashMap::new();
+
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, self.pid) };
+
+        if snapshot != 0   //   windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE
+        {
+
+            let mut thread_entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+            thread_entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+
+            let mut owned_count = 0;
+            let mut other_count = 0;
+
+            unsafe {
+
+                if Thread32First(snapshot, &mut thread_entry) != 0
+                {
+                    loop
+                    {
+                        if thread_entry.th32OwnerProcessID == self.pid
+                        {
+                            owned_count += 1;
+                        }
+                        else
+                        {
+                            other_count += 1;
+                        }
+                        if Thread32Next(snapshot, &mut thread_entry) == 0
+                        {
+                            break;
+                        }
+                    }
+                }
+                CloseHandle(snapshot);
+            }
+
+            counts.insert("Owned threads".to_string(), owned_count);
+
+            if other_count > 0
+            {
+                counts.insert("Anomaly threads".to_string(), other_count);
+            }
+        }
+
+        counts
     }
 }
