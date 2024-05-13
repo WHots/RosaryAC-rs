@@ -2,7 +2,7 @@
 
 ## About The Project
 
-This project is currently a work in progress and represents my initial foray into Rust and AI development. As such, the codebase is experimental and subject to significant changes. The ultimate goal of this project is to provide a user-mode application that can be used to detect anomalies within a Windows process.
+The codebase is experimental and subject to significant changes. The ultimate goal of this project is to provide a user-mode application that can be used to detect anomalies within a Windows process.
 
 ### Built With
 
