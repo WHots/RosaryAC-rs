@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use windows_sys::Win32::Foundation::{HANDLE, MAX_PATH};
-use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 
 mod processutils;
 mod memoryutils;
@@ -9,8 +9,10 @@ mod fileutils;
 use crate::processutils::ProcessInfo;
 use crate::fileutils::get_file_internal_name;
 use crate::fileutils::get_file_entropy;
+use crate::memoryutils::get_section_info;
 
-const PROCESS_FLAGS: u32 = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ;
+
+const PROCESS_FLAGS: u32 = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION;
 
 
 
@@ -19,7 +21,7 @@ const PROCESS_FLAGS: u32 = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ;
 fn main()
 {
 
-    let pid: u32 = unsafe { GetCurrentProcessId() };
+    let pid: u32 =  11356; //   unsafe { GetCurrentProcessId() };
 
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
     
@@ -43,6 +45,15 @@ fn main()
             {
                 Ok(entropy) => println!("The entropy of the file is: {}", entropy),
                 Err(e) => println!("{}", e),
+            }
+
+            let section_name = ".text";
+            let section_infos = unsafe { get_section_info(process_handle, section_name) };
+
+            for section_info in section_infos
+            {
+                println!("Section Name: {}, Virtual Address: {:X}, Size of Raw Data: {}",
+                         section_info.name, section_info.virtual_address, section_info.size_of_raw_data);
             }
 
             match process_info.get_peb_base_address()
