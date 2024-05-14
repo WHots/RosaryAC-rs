@@ -1,17 +1,24 @@
-# Hearbeat AI-rs (Work in Progress)
+# RosaryAC - Proof of Concept Anti-Cheat Client (Work in Progress)
 
 ## About The Project
 
-The codebase is experimental and subject to significant changes. The ultimate goal of this project is to provide a user-mode application that can be used to detect anomalies within a Windows process.
+RosaryAC is a **proof of concept (PoC)** user-sided anti-cheat client designed to safeguard the FiveM client process. This project is currently experimental and under development. The codebase and the project's direction are subject to change at any time.
+
+**Project Change Log**
+- **Date:** 5/13/2024
+- **Update:** The project has transitioned to an anti-cheat client.
+
+This application is intended as a PoC for those interested in anti-cheat mechanisms. It is important to note that RosaryAC **does not provide resources for reversing cheats** or any malicious methods of gaining undetected access to the FiveM client process. Additionally, it is not designed to target or single out any specific cheat provider.
 
 ### Built With
 
-* Rust Language
-* AI and machine learning libraries (TBD)
-
+- **Rust Language:** The core of RosaryAC is built using Rust, known for its safety and performance.
+- **AI and Machine Learning Libraries:** To be determined (TBD).
 
 ### Prerequisites
 
-This project is built with Rust, so you'll need to have Rust and Cargo installed on your system. You can install them using rustup. [Install](https://doc.rust-lang.org/book/ch01-01-installation.html)
+To work with RosaryAC, you must have Rust and Cargo installed on your system. You can install them using rustup, which is available here.
 
-![rust-logo-256x256](https://github.com/WHots/Heartbeat-AI-rs/assets/56490828/eb8f5f8a-b86b-4c15-aab0-3f64dcd412b9)
+---
+
+**Note:** As this project is a work in progress, the information provided here is subject to change. Keep an eye on the repository for the latest updates.
