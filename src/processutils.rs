@@ -3,8 +3,9 @@ use std::ffi::{c_void, OsStr, OsString};
 //  use std::borrow::Borrow;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
+use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE, NTSTATUS};
-use windows_sys::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
+use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
 use windows_sys::Win32::System::Threading::{PEB, PROCESS_BASIC_INFORMATION};
 
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
@@ -131,6 +132,49 @@ impl ProcessInfo
         }
 
         Ok((base_address, module_info.SizeOfImage as usize))
+    }
+
+
+    /// Retrieves a list of module handles for a given process.
+    ///
+    /// # Arguments
+    ///
+    /// * `h_process` - A handle to the process.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a vector of module handles if successful, or an error string otherwise.
+    pub fn get_process_modules(&self) -> Result<Vec<HMODULE>, String>
+    {
+
+        let mut modules: Vec<HMODULE> = Vec::with_capacity(1024);
+
+        unsafe {
+            modules.set_len(1024);
+        }
+
+        let mut cb_needed = 0;
+
+        let success = unsafe {
+            EnumProcessModules(
+                self.process_handle,
+                modules.as_mut_ptr(),
+                (modules.len() * std::mem::size_of::<HMODULE>()) as u32,
+                &mut cb_needed,
+            )
+        };
+
+        if success == 0 {
+            return Err(format!("Failed to enumerate process modules. Error code: {}", unsafe { GetLastError() }));
+        }
+
+        let module_count = cb_needed as usize / std::mem::size_of::<HMODULE>();
+
+        unsafe {
+            modules.set_len(module_count);
+        }
+
+        Ok(modules)
     }
 
 

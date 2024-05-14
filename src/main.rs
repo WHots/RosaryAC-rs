@@ -9,7 +9,7 @@ mod fileutils;
 use crate::processutils::ProcessInfo;
 use crate::fileutils::get_file_internal_name;
 use crate::fileutils::get_file_entropy;
-use crate::memoryutils::get_section_info;
+use crate::memoryutils::display_section_info;
 
 
 const PROCESS_FLAGS: u32 = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION;
@@ -21,7 +21,7 @@ const PROCESS_FLAGS: u32 = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION;
 fn main()
 {
 
-    let pid: u32 =  11356; //   unsafe { GetCurrentProcessId() };
+    let pid: u32 = 1036; //   unsafe { GetCurrentProcessId() };
 
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
     
@@ -32,7 +32,7 @@ fn main()
 
     match unsafe { process_info.get_process_image_path_ex(&mut buffer, &mut output) }
     {
-        Ok(path) => {
+        Ok(path) => unsafe {
 
             println!("{:?}", path);
 
@@ -46,14 +46,27 @@ fn main()
                 Ok(entropy) => println!("The entropy of the file is: {}", entropy),
                 Err(e) => println!("{}", e),
             }
-
-            let section_name = ".text";
-            let section_infos = unsafe { get_section_info(process_handle, section_name) };
-
-            for section_info in section_infos
+            match process_info.get_main_module_ex()
             {
-                println!("Section Name: {}, Virtual Address: {:X}, Size of Raw Data: {}",
-                         section_info.name, section_info.virtual_address, section_info.size_of_raw_data);
+                Ok((base_address, size_of_image)) => {
+                    println!("Base Address: {:?}", base_address);
+                    println!("Size of Image: {}", size_of_image);
+
+                    match display_section_info(".text", process_handle, base_address)
+                    {
+                        Ok(Some(section_info)) => println!(
+                            "Section: {}\nVirtual Address: {:X}\nSize of Raw Data: {}",
+                            section_info.name,
+                            section_info.virtual_address,
+                            section_info.size_of_raw_data
+                        ),
+                        Ok(None) => println!("Section not found."),
+                        Err(err) => eprintln!("Error: {}", err),
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Error: {}", err);
+                }
             }
 
             match process_info.get_peb_base_address()
