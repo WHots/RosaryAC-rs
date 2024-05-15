@@ -15,7 +15,7 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot
 
 
 #[repr(C)]
-pub struct PROCESS_EXTENDED_BASIC_INFORMATION
+struct PROCESS_EXTENDED_BASIC_INFORMATION
 {
     /// The size of the structure, in bytes.
     Size: usize,
@@ -39,10 +39,12 @@ impl PROCESS_EXTENDED_BASIC_INFORMATION
 
 
 #[repr(u32)]
-pub enum ProcessInformationClass
+enum ProcessInformationClass
 {
     ProcessBasicInformation = 0,
+    ProcessDebugPort = 7,
 }
+
 
 
 #[link(name = "ntdll")]
@@ -224,6 +226,41 @@ impl ProcessInfo
     }
 
 
+    // Checks if the process is being debugged by querying the debug port.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<bool, String>` - `true` if the process is being debugged, otherwise `false`.
+    pub fn is_debugger(&self) -> Result<bool, String>
+    {
+
+        if self.process_handle == 0
+        {
+            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
+        }
+
+        let mut debug_port: isize = 0;
+        let mut return_length: u32 = 0;
+
+        let status = unsafe {
+            NtQueryInformationProcess(
+                self.process_handle,
+                ProcessInformationClass::ProcessDebugPort as u32,
+                &mut debug_port as *mut _ as *mut c_void,
+                size_of::<isize>() as u32,
+                &mut return_length,
+            )
+        };
+
+        if status != 0
+        {
+            return Err(format!("Failed to query debug port. NTSTATUS: {}", status));
+        }
+
+        Ok(debug_port != 0)
+    }
+
+
     /// Retrieves the base address of the Process Environment Block (PEB).
     ///
     /// # Errors
@@ -273,7 +310,7 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<bool, String>` - `true` if the process is running under WOW64, `false` otherwise, or an error.
-    pub fn is_process64(&self) -> Result<bool, String>
+    pub fn is_wow64(&self) -> Result<bool, String>
     {
 
         if self.process_handle == 0

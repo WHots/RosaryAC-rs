@@ -5,11 +5,13 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PR
 mod processutils;
 mod memoryutils;
 mod fileutils;
+mod peutils;
 
 use crate::processutils::ProcessInfo;
 use crate::fileutils::get_file_internal_name;
 use crate::fileutils::get_file_entropy;
-use crate::memoryutils::display_section_info;
+
+use crate::peutils::display_section_info;
 
 
 const PROCESS_FLAGS: u32 = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION;
@@ -21,7 +23,7 @@ const PROCESS_FLAGS: u32 = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION;
 fn main()
 {
 
-    let pid: u32 = 1036; //   unsafe { GetCurrentProcessId() };
+    let pid: u32 = unsafe { GetCurrentProcessId() };
 
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
     
@@ -75,7 +77,7 @@ fn main()
                 Err(e) => eprintln!("Error: {}", e),
             }
 
-            match process_info.is_process64()
+            match process_info.is_wow64()
             {
                 Ok(is_wow64) => println!("WoW64 Emulation: {}", is_wow64),
                 Err(e) => eprintln!("Error: {}", e),
