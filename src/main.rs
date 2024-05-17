@@ -6,6 +6,7 @@ mod processutils;
 mod memoryutils;
 mod fileutils;
 mod peutils;
+mod ntpsapi_h;
 
 use crate::processutils::ProcessInfo;
 use crate::fileutils::get_file_internal_name;

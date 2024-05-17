@@ -1,17 +1,14 @@
 use std::collections::HashMap;
 use std::ffi::{c_void, OsStr, OsString};
-//  use std::borrow::Borrow;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
-use std::ptr::null_mut;
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE, NTSTATUS};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
-use windows_sys::Win32::System::Threading::{PEB, PROCESS_BASIC_INFORMATION};
+use windows_sys::Win32::System::Threading::{OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_QUERY_INFORMATION};
 
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
-
-
-
+use crate::ntpsapi_h::{NtQueryInformationProcess, NtQueryInformationThread, THREADINFOCLASS};
+use crate::ntpsapi_h::THREADINFOCLASS::ThreadHideFromDebugger;
 
 
 #[repr(C)]
@@ -38,25 +35,20 @@ impl PROCESS_EXTENDED_BASIC_INFORMATION
 }
 
 
+struct HandleGuard(HANDLE);
+impl Drop for HandleGuard
+{
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+
 #[repr(u32)]
 enum ProcessInformationClass
 {
     ProcessBasicInformation = 0,
     ProcessDebugPort = 7,
-}
-
-
-
-#[link(name = "ntdll")]
-extern "system"
-{
-    fn NtQueryInformationProcess(
-        ProcessHandle: HANDLE,
-        ProcessInformationClass: u32,
-        ProcessInformation: *mut c_void,
-        ProcessInformationLength: u32,
-        ReturnLength: *mut u32,
-    ) -> NTSTATUS;
 }
 
 
@@ -68,6 +60,8 @@ pub struct ProcessInfo
     process_handle: HANDLE,
 }
 
+
+const THREAD_HIDE_FROM_DEBUGGER: THREADINFOCLASS = ThreadHideFromDebugger;
 
 impl ProcessInfo
 {
@@ -435,15 +429,16 @@ impl ProcessInfo
     /// This method creates a snapshot of the threads for the process identified by `self.pid`
     /// and counts the number of threads owned by the process as well as any anomaly threads.
     ///
+    /// It also counts the number of threads with the "hide from debugger" flag enabled.
+    ///
     /// # Returns
     ///
-    /// A `HashMap<String, usize>` where the keys are "Owned threads" and "Anomaly threads" (if any),
-    /// and the values are the respective counts of those threads.
+    /// A `HashMap<String, usize>` where the keys are "Owned threads", "Anomaly threads" (if any),
+    /// and "Hidden threads" (if any), and the values are the respective counts of those threads.
     ///
     /// # Errors
     ///
-    /// If the snapshot handle is equal to `windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE`,
-    /// no counts are performed, and an empty `HashMap` is returned.
+    /// If the snapshot handle is equal to `0`, no counts are performed, and an empty `HashMap` is returned.
     pub fn enumerate_threads(&self) -> HashMap<String, usize>
     {
 
@@ -451,9 +446,8 @@ impl ProcessInfo
 
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, self.pid) };
 
-        if snapshot != 0   //   windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE
+        if snapshot != 0
         {
-
             let mut thread_entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
             thread_entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
 
@@ -461,16 +455,14 @@ impl ProcessInfo
             let mut other_count = 0;
 
             unsafe {
-
                 if Thread32First(snapshot, &mut thread_entry) != 0
                 {
-                    loop
-                    {
+                    loop {
+
                         if thread_entry.th32OwnerProcessID == self.pid
                         {
                             owned_count += 1;
-                        }
-                        else
+                        } else
                         {
                             other_count += 1;
                         }
@@ -490,8 +482,100 @@ impl ProcessInfo
             {
                 counts.insert("Anomaly threads".to_string(), other_count);
             }
+
+            let hidden_thread_count = Self::get_hidden_thread_count(self.pid);
+
+            if hidden_thread_count > 0
+            {
+                counts.insert("Hidden threads".to_string(), hidden_thread_count as usize);
+            }
         }
 
         counts
     }
+
+
+    /// This function checks if a thread has the "hide from debugger" flag enabled.
+    ///
+    /// # Arguments
+    /// * `h_thread` - Handle to the thread to check.
+    ///
+    /// # Returns
+    /// * `true` if the thread has the "hide from debugger" flag set, otherwise `false`.
+    ///
+    /// # Safety
+    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
+    #[inline]
+    pub fn is_thread_hidden_from_debugger(h_thread: HANDLE) -> bool
+    {
+        let mut thread_hidden: u32 = 0;
+
+        let status = unsafe {
+            NtQueryInformationThread(
+                h_thread,
+                THREADINFOCLASS::ThreadHideFromDebugger,
+                &mut thread_hidden as *mut _ as *mut c_void,
+                std::mem::size_of::<u32>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+
+        status == 0 && thread_hidden != 0
+    }
+
+
+    /// This function creates a snapshot of all threads in the process and counts how many have the "hide from debugger" flag set.
+    ///
+    /// # Arguments
+    /// * `pid` - The process ID of the target process.
+    ///
+    /// # Returns
+    /// * The count of threads with the "hide from debugger" flag set.
+    ///
+    /// # Safety
+    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
+    #[inline]
+    pub fn get_hidden_thread_count(pid: u32) -> i32
+    {
+
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, pid) };
+
+        if snapshot == 0
+        {
+            return 0;
+        }
+
+        let mut te32: THREADENTRY32 = unsafe { std::mem::zeroed() };
+        let mut hidden_thread_count = 0;
+
+        unsafe {
+            if Thread32First(snapshot, &mut te32) != 0
+            {
+                loop {
+
+                    if te32.th32OwnerProcessID == pid
+                    {
+                        let h_thread = OpenThread(THREAD_QUERY_INFORMATION, 0, te32.th32ThreadID);
+
+                        if h_thread != 0
+                        {
+                            if Self::is_thread_hidden_from_debugger(h_thread)
+                            {
+                                hidden_thread_count += 1;
+                            }
+                            CloseHandle(h_thread);
+                        }
+                    }
+                    if Thread32Next(snapshot, &mut te32) == 0
+                    {
+                        break;
+                    }
+                }
+            }
+            CloseHandle(snapshot);
+        }
+
+        hidden_thread_count
+    }
+
 }
