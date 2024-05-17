@@ -5,10 +5,13 @@ use std::os::windows::ffi::OsStringExt;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
 use windows_sys::Win32::System::Threading::{OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_QUERY_INFORMATION};
-
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
+
+use crate::memorymanage::CleanHandle;
 use crate::ntpsapi_h::{NtQueryInformationProcess, NtQueryInformationThread, THREADINFOCLASS};
 use crate::ntpsapi_h::THREADINFOCLASS::ThreadHideFromDebugger;
+
+
 
 
 #[repr(C)]
@@ -35,14 +38,6 @@ impl PROCESS_EXTENDED_BASIC_INFORMATION
 }
 
 
-struct HandleGuard(HANDLE);
-impl Drop for HandleGuard
-{
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.0) };
-    }
-}
-
 
 #[repr(u32)]
 enum ProcessInformationClass
@@ -52,6 +47,7 @@ enum ProcessInformationClass
 }
 
 
+const THREAD_HIDE_FROM_DEBUGGER: THREADINFOCLASS = ThreadHideFromDebugger;
 
 
 pub struct ProcessInfo
@@ -60,8 +56,6 @@ pub struct ProcessInfo
     process_handle: HANDLE,
 }
 
-
-const THREAD_HIDE_FROM_DEBUGGER: THREADINFOCLASS = ThreadHideFromDebugger;
 
 impl ProcessInfo
 {
@@ -439,60 +433,64 @@ impl ProcessInfo
     /// # Errors
     ///
     /// If the snapshot handle is equal to `0`, no counts are performed, and an empty `HashMap` is returned.
-    pub fn enumerate_threads(&self) -> HashMap<String, usize>
+    pub fn get_violent_threads(&self) -> HashMap<String, usize>
     {
 
         let mut counts = HashMap::new();
 
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, self.pid) };
 
-        if snapshot != 0
-        {
-            let mut thread_entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
-            thread_entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        let snapshot = match CleanHandle::new(snapshot) {
+            Some(handle) => handle,
+            None => return counts,
+        };
 
-            let mut owned_count = 0;
-            let mut other_count = 0;
+        let mut thread_entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+        thread_entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
 
-            unsafe {
-                if Thread32First(snapshot, &mut thread_entry) != 0
-                {
-                    loop {
+        let mut owned_count = 0;
+        let mut other_count = 0;
 
-                        if thread_entry.th32OwnerProcessID == self.pid
-                        {
-                            owned_count += 1;
-                        } else
-                        {
-                            other_count += 1;
-                        }
+        unsafe {
 
-                        if Thread32Next(snapshot, &mut thread_entry) == 0
-                        {
-                            break;
-                        }
+            if Thread32First(snapshot.as_raw(), &mut thread_entry) != 0
+            {
+                loop {
+
+                    if thread_entry.th32OwnerProcessID == self.pid
+                    {
+                        owned_count += 1;
+                    }
+                    else
+                    {
+                        other_count += 1;
+                    }
+
+                    if Thread32Next(snapshot.as_raw(), &mut thread_entry) == 0
+                    {
+                        break;
                     }
                 }
-                CloseHandle(snapshot);
             }
+        }
 
-            counts.insert("Owned threads".to_string(), owned_count);
+        counts.insert("Owned threads".to_string(), owned_count);
 
-            if other_count > 0
-            {
-                counts.insert("Anomaly threads".to_string(), other_count);
-            }
+        if other_count > 0
+        {
+            counts.insert("Anomaly threads".to_string(), other_count);
+        }
 
-            let hidden_thread_count = Self::get_hidden_thread_count(self.pid);
+        let hidden_thread_count = self.get_hidden_thread_count();
 
-            if hidden_thread_count > 0
-            {
-                counts.insert("Hidden threads".to_string(), hidden_thread_count as usize);
-            }
+        if hidden_thread_count > 0
+        {
+            counts.insert("Hidden threads".to_string(), hidden_thread_count as usize);
         }
 
         counts
     }
+
 
 
     /// This function checks if a thread has the "hide from debugger" flag enabled.
@@ -535,44 +533,45 @@ impl ProcessInfo
     /// # Safety
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
     #[inline]
-    fn get_hidden_thread_count(pid: u32) -> i32
+    fn get_hidden_thread_count(&self) -> i32
     {
 
-        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, pid) };
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, self.pid) };
 
-        if snapshot == 0
+        let snapshot = match CleanHandle::new(snapshot)
         {
-            return 0;
-        }
+            Some(handle) => handle,
+            None => return 0,
+        };
 
         let mut te32: THREADENTRY32 = unsafe { std::mem::zeroed() };
         let mut hidden_thread_count = 0;
 
         unsafe {
-            if Thread32First(snapshot, &mut te32) != 0
+
+            if Thread32First(snapshot.as_raw() as HANDLE, &mut te32) != 0
             {
                 loop {
 
-                    if te32.th32OwnerProcessID == pid
+                    if te32.th32OwnerProcessID == self.pid
                     {
                         let h_thread = OpenThread(THREAD_QUERY_INFORMATION, 0, te32.th32ThreadID);
 
-                        if h_thread != 0
+                        if let Some(thread_handle) = CleanHandle::new(h_thread)
                         {
-                            if Self::is_thread_hidden_from_debugger(h_thread)
+                            if Self::is_thread_hidden_from_debugger(thread_handle.as_raw())
                             {
                                 hidden_thread_count += 1;
                             }
-                            CloseHandle(h_thread);
                         }
                     }
-                    if Thread32Next(snapshot, &mut te32) == 0
+
+                    if Thread32Next(snapshot.as_raw(), &mut te32) == 0
                     {
                         break;
                     }
                 }
             }
-            CloseHandle(snapshot);
         }
 
         hidden_thread_count

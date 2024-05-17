@@ -1,5 +1,5 @@
 use windows_sys::Win32::System::Diagnostics::Debug::{ImageNtHeader, ReadProcessMemory, IMAGE_NT_HEADERS64, IMAGE_SECTION_HEADER};
-use windows_sys::Win32::Foundation::{GetLastError, BOOL, HANDLE};
+use windows_sys::Win32::Foundation::{GetLastError, BOOL, HANDLE, CloseHandle};
 use std::{mem, slice};
 use std::ffi::{c_void, CStr};
 use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQueryEx};
