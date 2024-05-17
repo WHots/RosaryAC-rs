@@ -506,7 +506,7 @@ impl ProcessInfo
     /// # Safety
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
     #[inline]
-    pub fn is_thread_hidden_from_debugger(h_thread: HANDLE) -> bool
+    fn is_thread_hidden_from_debugger(h_thread: HANDLE) -> bool
     {
         let mut thread_hidden: u32 = 0;
 
@@ -535,7 +535,7 @@ impl ProcessInfo
     /// # Safety
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
     #[inline]
-    pub fn get_hidden_thread_count(pid: u32) -> i32
+    fn get_hidden_thread_count(pid: u32) -> i32
     {
 
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, pid) };
@@ -577,5 +577,4 @@ impl ProcessInfo
 
         hidden_thread_count
     }
-
 }
