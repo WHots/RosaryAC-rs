@@ -3,19 +3,18 @@ use std::ffi::{c_void, OsStr, OsString};
 use std::{mem, ptr};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
-use windows_sys::Win32::System::Threading::{GetProcessId, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_QUERY_INFORMATION};
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessId, GetProcessIdOfThread, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_QUERY_INFORMATION};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 
+use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_INFORMATION_CLASS, TOKEN_PRIVILEGES, TOKEN_QUERY};
+use TokenInformationClass::TokenPrivileges;
+
 use crate::memorymanage::CleanHandle;
 use crate::ntpsapi_h::{NtQueryInformationProcess, NtQueryInformationThread, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
-use crate::ntpsapi_h::THREADINFOCLASS::ThreadHideFromDebugger;
-
-
-
-
+use crate::winnt_h::TokenInformationClass;
 
 
 impl PROCESS_EXTENDED_BASIC_INFORMATION
@@ -32,7 +31,6 @@ impl PROCESS_EXTENDED_BASIC_INFORMATION
 
 
 
-const THREAD_HIDE_FROM_DEBUGGER: THREADINFOCLASS = ThreadHideFromDebugger;
 
 
 pub struct ProcessInfo
@@ -74,6 +72,7 @@ impl ProcessInfo
     /// * `Result<(HMODULE, usize), String>` - The handle and size of the main module or an error.
     pub fn get_main_module_ex(&self) -> Result<(*mut c_void, usize), String>
     {
+
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -117,6 +116,7 @@ impl ProcessInfo
     /// A `Result` containing a vector of module handles if successful, or an error string otherwise.
     pub fn get_process_modules(&self) -> Result<Vec<HMODULE>, String>
     {
+
         let mut modules: Vec<HMODULE> = Vec::with_capacity(1024);
 
         unsafe {
@@ -167,6 +167,7 @@ impl ProcessInfo
     /// * `Result<&'a OsStr, &'static str>` - A reference to the `OsStr` slice containing the file path of the main module, or an error if the operation fails.
     pub fn get_process_image_path_ex<'a>(&self, buffer: &'a mut Vec<u16>, output: &'a mut OsString) -> Result<&'a OsStr, &'static str>
     {
+
         const MAX_PATH: usize = 260;
         buffer.resize(MAX_PATH, 0);
 
@@ -200,6 +201,7 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is being debugged, otherwise `false`.
     pub fn is_debugger(&self) -> Result<bool, String>
     {
+
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -238,6 +240,7 @@ impl ProcessInfo
     /// * `Result<*mut PEB, String>` - The base address of the PEB or an error.
     pub fn get_peb_base_address(&self) -> Result<*mut PEB, String>
     {
+
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -277,6 +280,7 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is running under WOW64, `false` otherwise, or an error.
     pub fn is_wow64(&self) -> Result<bool, String>
     {
+
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -319,6 +323,7 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is protected, `false` otherwise, or an error.
     pub fn is_protected_process(&self) -> Result<bool, String>
     {
+
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -361,6 +366,7 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is a secure process, `false` otherwise, or an error.
     pub fn is_secure_process(&self) -> Result<bool, String>
     {
+
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -407,7 +413,7 @@ impl ProcessInfo
     /// # Safety
     ///
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
-    pub fn get_violent_threads(&self) -> HashMap<String, usize>
+    pub fn query_thread_information(&self) -> HashMap<String, usize>
     {
 
         let mut counts = HashMap::new();
@@ -421,9 +427,9 @@ impl ProcessInfo
         let mut thread_entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
         thread_entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
 
-        let mut owned_count = 0;
         let mut not_owned = 0;
         let mut hidden_thread_count = 0;
+        let mut total_count = 0;
 
 
         unsafe {
@@ -434,6 +440,8 @@ impl ProcessInfo
 
                     if thread_entry.th32OwnerProcessID == self.pid
                     {
+                        total_count += 1;
+
                         let h_thread = OpenThread(THREAD_QUERY_INFORMATION, 0, thread_entry.th32ThreadID);
 
                         if let Some(thread_handle) = CleanHandle::new(h_thread)
@@ -443,27 +451,15 @@ impl ProcessInfo
                                 hidden_thread_count += 1;
                             }
 
-                            if let Some(client_id) = Self::get_thread_client_id(thread_handle.as_raw())
-                            {
-                                if client_id.UniqueProcess != INVALID_HANDLE_VALUE
-                                {
-                                    let thread_owner_id = GetProcessId(client_id.UniqueProcess);
+                            let thread_owner_id: u32 = GetProcessIdOfThread(thread_handle.as_raw());
 
-                                    if thread_owner_id != 0
-                                    {
-                                        if thread_owner_id == thread_entry.th32OwnerProcessID
-                                        {
-                                            owned_count += 1;
-                                        }
-                                        else
-                                        {
-                                            not_owned += 1;
-                                        }
-                                    }
-                                }
+                            if thread_owner_id != thread_entry.th32OwnerProcessID
+                            {
+                                not_owned += 1;
                             }
                         }
                     }
+
                     if Thread32Next(snapshot.as_raw(), &mut thread_entry) == 0 {
                         break;
                     }
@@ -471,11 +467,69 @@ impl ProcessInfo
             }
         }
 
-        counts.insert("Owned".to_string(), owned_count);
+
+        counts.insert("Total".to_string(), total_count);
         counts.insert("NOT Owned".to_string(), not_owned);
         counts.insert("Hidden Flag".to_string(), hidden_thread_count);
 
         counts
+    }
+
+
+    /// This function checks if a process has a specified privilege enabled.
+    ///
+    /// # Arguments
+    /// * `privilege_luid` - The LUID (Locally Unique Identifier) of the privilege to check.
+    ///
+    /// # Returns
+    /// * `true` if the process has the specified privilege, otherwise `false`.
+    ///
+    /// # Safety
+    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
+    pub fn has_privilege(&self, privilege_luid: LUID) -> bool
+    {
+
+        let mut token_handle: HANDLE = 0;
+
+        let result = unsafe { OpenProcessToken(self.process_handle, TOKEN_QUERY, &mut token_handle) };
+
+        let clean_handle = match CleanHandle::new(token_handle) {
+            Some(handle) => handle,
+            None => return false,
+        };
+
+        let mut return_length = 0;
+
+        let result = unsafe { GetTokenInformation(clean_handle.as_raw(), 2 as TOKEN_INFORMATION_CLASS, ptr::null_mut(), 0, &mut return_length) };
+
+        if result == 0 && return_length == 0
+        {
+            return false;
+        }
+
+        let mut token_privileges_vec = vec![0u8; return_length as usize];
+        let token_privileges = token_privileges_vec.as_mut_ptr() as *mut TOKEN_PRIVILEGES;
+
+        let result = unsafe { GetTokenInformation(clean_handle.as_raw(), 2 as TOKEN_INFORMATION_CLASS, token_privileges as *mut _, return_length, &mut return_length) };
+
+        if result == 0
+        {
+            return false;
+        }
+
+        let privileges: &TOKEN_PRIVILEGES = unsafe { &*token_privileges };
+
+        for i in 0..privileges.PrivilegeCount
+        {
+            let luid = privileges.Privileges[i as usize].Luid;
+
+            if luid.LowPart == privilege_luid.LowPart && luid.HighPart == privilege_luid.HighPart
+            {
+                return true;
+            }
+        }
+
+        false
     }
 
 

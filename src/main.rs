@@ -8,6 +8,7 @@ mod fileutils;
 mod peutils;
 mod ntpsapi_h;
 mod memorymanage;
+mod winnt_h;
 
 use crate::processutils::ProcessInfo;
 use crate::fileutils::get_file_internal_name;
@@ -23,7 +24,7 @@ const PROCESS_FLAGS: u32 = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION;
 //  Testing stuff in here, so it will probably be very random.
 
 fn main() {
-    let pid: u32 = 7124; //unsafe { GetCurrentProcessId() };
+    let pid: u32 = 1220; //unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 
     let process_info = ProcessInfo::new(pid, process_handle);
@@ -31,7 +32,7 @@ fn main() {
     let mut buffer = Vec::new();
     let mut output = OsString::new();
 
-    let violent_threads = process_info.get_violent_threads();
+    let violent_threads = process_info.query_thread_information();
     println!("Violent Threads: {:?}", violent_threads);
 
     match unsafe { process_info.get_process_image_path_ex(&mut buffer, &mut output) } {
@@ -51,16 +52,7 @@ fn main() {
                     println!("Base Address: {:?}", base_address);
                     println!("Size of Image: {}", size_of_image);
 
-                    match display_section_info(".text", process_handle, base_address) {
-                        Ok(Some(section_info)) => println!(
-                            "Section: {}\nVirtual Address: {:X}\nSize of Raw Data: {}",
-                            section_info.name,
-                            section_info.virtual_address,
-                            section_info.size_of_raw_data
-                        ),
-                        Ok(None) => println!("Section not found."),
-                        Err(err) => eprintln!("Error: {}", err),
-                    }
+
                 }
                 Err(err) => {
                     eprintln!("Error: {}", err);

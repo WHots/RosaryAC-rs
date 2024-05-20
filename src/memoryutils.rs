@@ -1,12 +1,6 @@
-use windows_sys::Win32::System::Diagnostics::Debug::{ImageNtHeader, ReadProcessMemory, IMAGE_NT_HEADERS64, IMAGE_SECTION_HEADER};
-use windows_sys::Win32::Foundation::{GetLastError, BOOL, HANDLE, CloseHandle};
-use std::{mem, slice};
-use std::ffi::{c_void, CStr};
-use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQueryEx};
-use windows_sys::Win32::System::SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_IMPORT_DESCRIPTOR, IMAGE_NT_SIGNATURE};
-use windows_sys::Win32::System::WindowsProgramming::IMAGE_THUNK_DATA64;
-
-
+use std::{ffi::{c_void, CStr}, mem, slice};
+use windows_sys::Win32::Foundation::{BOOL, HANDLE, GetLastError};
+use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory};
 
 
 
@@ -61,13 +55,13 @@ macro_rules! memmem {
 
 
 
+/// Enum for breakpoint opcodes.
 #[repr(u8)]
 enum BreakpointOpcode
 {
-    Int3 = 0xCC,    //  Int3
-    Int1 = 0xF1,    //  ICE
+    Int3 = 0xCC, // Int3
+    Int1 = 0xF1, // ICE
 }
-
 
 
 
@@ -82,8 +76,7 @@ enum BreakpointOpcode
 /// # Returns
 ///
 /// A `Result` containing the value read from memory if successful, or an error string otherwise.
-#[inline]
-pub(crate) fn read_memory<T: Sized>(process_handle: HANDLE, address: *const u8) -> Result<T, String>
+pub fn read_memory<T: Sized>(process_handle: HANDLE, address: *const u8) -> Result<T, String>
 {
 
     let mut buffer: T = unsafe { mem::zeroed() };
@@ -101,12 +94,7 @@ pub(crate) fn read_memory<T: Sized>(process_handle: HANDLE, address: *const u8) 
 
     if success == 0 || bytes_read != mem::size_of::<T>()
     {
-        unsafe {
-            return Err(format!(
-                "Failed to read memory at address {:?}. Error code: {}",
-                address, GetLastError()
-            ));
-        }
+        return Err(format!("Failed to read memory at address {:?}. Error code: {}", address, unsafe { GetLastError() }));
     }
 
     Ok(buffer)
