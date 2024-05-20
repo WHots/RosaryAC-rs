@@ -1,29 +1,22 @@
 use std::collections::HashMap;
 use std::ffi::{c_void, OsStr, OsString};
+use std::{mem, ptr};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
-use windows_sys::Win32::System::Threading::{OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_QUERY_INFORMATION};
+use windows_sys::Win32::System::Threading::{GetProcessId, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_QUERY_INFORMATION};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
+use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 
 use crate::memorymanage::CleanHandle;
-use crate::ntpsapi_h::{NtQueryInformationProcess, NtQueryInformationThread, THREADINFOCLASS};
+use crate::ntpsapi_h::{NtQueryInformationProcess, NtQueryInformationThread, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
 use crate::ntpsapi_h::THREADINFOCLASS::ThreadHideFromDebugger;
 
 
 
 
-#[repr(C)]
-struct PROCESS_EXTENDED_BASIC_INFORMATION
-{
-    /// The size of the structure, in bytes.
-    Size: usize,
-    /// Basic information about the process.
-    BasicInfo: PROCESS_BASIC_INFORMATION,
-    /// Flags that indicate additional information about the process.
-    Flags: u32,
-}
+
 
 impl PROCESS_EXTENDED_BASIC_INFORMATION
 {
@@ -39,14 +32,6 @@ impl PROCESS_EXTENDED_BASIC_INFORMATION
 
 
 
-#[repr(u32)]
-enum ProcessInformationClass
-{
-    ProcessBasicInformation = 0,
-    ProcessDebugPort = 7,
-}
-
-
 const THREAD_HIDE_FROM_DEBUGGER: THREADINFOCLASS = ThreadHideFromDebugger;
 
 
@@ -59,7 +44,6 @@ pub struct ProcessInfo
 
 impl ProcessInfo
 {
-
     /// Constructs a new `ProcessInfo` with the given process ID and handle.
     ///
     /// # Arguments
@@ -79,8 +63,6 @@ impl ProcessInfo
     }
 
 
-
-
     /// Retrieves the handle and size of the main module of the process.
     ///
     /// # Errors
@@ -92,7 +74,6 @@ impl ProcessInfo
     /// * `Result<(HMODULE, usize), String>` - The handle and size of the main module or an error.
     pub fn get_main_module_ex(&self) -> Result<(*mut c_void, usize), String>
     {
-
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -136,7 +117,6 @@ impl ProcessInfo
     /// A `Result` containing a vector of module handles if successful, or an error string otherwise.
     pub fn get_process_modules(&self) -> Result<Vec<HMODULE>, String>
     {
-
         let mut modules: Vec<HMODULE> = Vec::with_capacity(1024);
 
         unsafe {
@@ -187,7 +167,6 @@ impl ProcessInfo
     /// * `Result<&'a OsStr, &'static str>` - A reference to the `OsStr` slice containing the file path of the main module, or an error if the operation fails.
     pub fn get_process_image_path_ex<'a>(&self, buffer: &'a mut Vec<u16>, output: &'a mut OsString) -> Result<&'a OsStr, &'static str>
     {
-
         const MAX_PATH: usize = 260;
         buffer.resize(MAX_PATH, 0);
 
@@ -221,7 +200,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is being debugged, otherwise `false`.
     pub fn is_debugger(&self) -> Result<bool, String>
     {
-
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -260,7 +238,6 @@ impl ProcessInfo
     /// * `Result<*mut PEB, String>` - The base address of the PEB or an error.
     pub fn get_peb_base_address(&self) -> Result<*mut PEB, String>
     {
-
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -300,7 +277,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is running under WOW64, `false` otherwise, or an error.
     pub fn is_wow64(&self) -> Result<bool, String>
     {
-
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -343,7 +319,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is protected, `false` otherwise, or an error.
     pub fn is_protected_process(&self) -> Result<bool, String>
     {
-
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -386,7 +361,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is a secure process, `false` otherwise, or an error.
     pub fn is_secure_process(&self) -> Result<bool, String>
     {
-
         if self.process_handle == 0
         {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
@@ -430,16 +404,15 @@ impl ProcessInfo
     /// A `HashMap<String, usize>` where the keys are "Owned threads", "Anomaly threads" (if any),
     /// and "Hidden threads" (if any), and the values are the respective counts of those threads.
     ///
-    /// # Errors
+    /// # Safety
     ///
-    /// If the snapshot handle is equal to `0`, no counts are performed, and an empty `HashMap` is returned.
+    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
     pub fn get_violent_threads(&self) -> HashMap<String, usize>
     {
 
         let mut counts = HashMap::new();
 
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, self.pid) };
-
         let snapshot = match CleanHandle::new(snapshot) {
             Some(handle) => handle,
             None => return counts,
@@ -449,7 +422,9 @@ impl ProcessInfo
         thread_entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
 
         let mut owned_count = 0;
-        let mut other_count = 0;
+        let mut not_owned = 0;
+        let mut hidden_thread_count = 0;
+
 
         unsafe {
 
@@ -459,38 +434,86 @@ impl ProcessInfo
 
                     if thread_entry.th32OwnerProcessID == self.pid
                     {
-                        owned_count += 1;
-                    }
-                    else
-                    {
-                        other_count += 1;
-                    }
+                        let h_thread = OpenThread(THREAD_QUERY_INFORMATION, 0, thread_entry.th32ThreadID);
 
-                    if Thread32Next(snapshot.as_raw(), &mut thread_entry) == 0
-                    {
+                        if let Some(thread_handle) = CleanHandle::new(h_thread)
+                        {
+                            if Self::is_thread_hidden_from_debugger(thread_handle.as_raw())
+                            {
+                                hidden_thread_count += 1;
+                            }
+
+                            if let Some(client_id) = Self::get_thread_client_id(thread_handle.as_raw())
+                            {
+                                if client_id.UniqueProcess != INVALID_HANDLE_VALUE
+                                {
+                                    let thread_owner_id = GetProcessId(client_id.UniqueProcess);
+
+                                    if thread_owner_id != 0
+                                    {
+                                        if thread_owner_id == thread_entry.th32OwnerProcessID
+                                        {
+                                            owned_count += 1;
+                                        }
+                                        else
+                                        {
+                                            not_owned += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if Thread32Next(snapshot.as_raw(), &mut thread_entry) == 0 {
                         break;
                     }
                 }
             }
         }
 
-        counts.insert("Owned threads".to_string(), owned_count);
-
-        if other_count > 0
-        {
-            counts.insert("Anomaly threads".to_string(), other_count);
-        }
-
-        let hidden_thread_count = self.get_hidden_thread_count();
-
-        if hidden_thread_count > 0
-        {
-            counts.insert("Hidden threads".to_string(), hidden_thread_count as usize);
-        }
+        counts.insert("Owned".to_string(), owned_count);
+        counts.insert("NOT Owned".to_string(), not_owned);
+        counts.insert("Hidden Flag".to_string(), hidden_thread_count);
 
         counts
     }
 
+
+    /// Returns the `CLIENT_ID` for a thread given its handle.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure `h_thread` is a valid handle to a thread that has not exited.
+    /// The function is unsafe due to raw pointer operations and system call usage.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<CLIENT_ID>` which is `Some` if successful, or `None` otherwise.
+    #[inline]
+    fn get_thread_client_id(h_thread: HANDLE) -> Option<CLIENT_ID>
+    {
+
+        let mut thread_info: THREAD_BASIC_INFORMATION = unsafe {mem::zeroed()};
+
+        let status = unsafe {
+            NtQueryInformationThread(
+                h_thread,
+                THREADINFOCLASS::ThreadBasicInformation,
+                &mut thread_info as *mut _ as *mut c_void,
+                mem::size_of::<THREAD_BASIC_INFORMATION>() as u32,
+                ptr::null_mut(),
+            )
+        };
+
+        if status == 0
+        {
+            Some(thread_info.client_id)
+        }
+        else
+        {
+            None
+        }
+    }
 
 
     /// This function checks if a thread has the "hide from debugger" flag enabled.
@@ -519,61 +542,5 @@ impl ProcessInfo
         };
 
         status == 0 && thread_hidden != 0
-    }
-
-
-    /// This function creates a snapshot of all threads in the process and counts how many have the "hide from debugger" flag set.
-    ///
-    /// # Arguments
-    /// * `pid` - The process ID of the target process.
-    ///
-    /// # Returns
-    /// * The count of threads with the "hide from debugger" flag set.
-    ///
-    /// # Safety
-    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
-    #[inline]
-    fn get_hidden_thread_count(&self) -> i32
-    {
-
-        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, self.pid) };
-
-        let snapshot = match CleanHandle::new(snapshot)
-        {
-            Some(handle) => handle,
-            None => return 0,
-        };
-
-        let mut te32: THREADENTRY32 = unsafe { std::mem::zeroed() };
-        let mut hidden_thread_count = 0;
-
-        unsafe {
-
-            if Thread32First(snapshot.as_raw() as HANDLE, &mut te32) != 0
-            {
-                loop {
-
-                    if te32.th32OwnerProcessID == self.pid
-                    {
-                        let h_thread = OpenThread(THREAD_QUERY_INFORMATION, 0, te32.th32ThreadID);
-
-                        if let Some(thread_handle) = CleanHandle::new(h_thread)
-                        {
-                            if Self::is_thread_hidden_from_debugger(thread_handle.as_raw())
-                            {
-                                hidden_thread_count += 1;
-                            }
-                        }
-                    }
-
-                    if Thread32Next(snapshot.as_raw(), &mut te32) == 0
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-
-        hidden_thread_count
     }
 }

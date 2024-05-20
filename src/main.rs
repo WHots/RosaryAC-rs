@@ -22,42 +22,36 @@ const PROCESS_FLAGS: u32 = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION;
 
 //  Testing stuff in here, so it will probably be very random.
 
-fn main()
-{
-
-    let pid: u32 = unsafe { GetCurrentProcessId() };
-
+fn main() {
+    let pid: u32 = 7124; //unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
-    
+
     let process_info = ProcessInfo::new(pid, process_handle);
 
     let mut buffer = Vec::new();
     let mut output = OsString::new();
 
-    match unsafe { process_info.get_process_image_path_ex(&mut buffer, &mut output) }
-    {
-        Ok(path) => unsafe {
+    let violent_threads = process_info.get_violent_threads();
+    println!("Violent Threads: {:?}", violent_threads);
 
+    match unsafe { process_info.get_process_image_path_ex(&mut buffer, &mut output) } {
+        Ok(path) => unsafe {
             println!("{:?}", path);
 
-            match get_file_internal_name(path)
-            {
+            match get_file_internal_name(path) {
                 Ok(internal_name) => println!("Internal Name: {:?}", internal_name),
                 Err(e) => eprintln!("Error: {}", e),
             }
-            match get_file_entropy(path)
-            {
+            match get_file_entropy(path) {
                 Ok(entropy) => println!("The entropy of the file is: {}", entropy),
                 Err(e) => println!("{}", e),
             }
-            match process_info.get_main_module_ex()
-            {
+            match process_info.get_main_module_ex() {
                 Ok((base_address, size_of_image)) => {
                     println!("Base Address: {:?}", base_address);
                     println!("Size of Image: {}", size_of_image);
 
-                    match display_section_info(".text", process_handle, base_address)
-                    {
+                    match display_section_info(".text", process_handle, base_address) {
                         Ok(Some(section_info)) => println!(
                             "Section: {}\nVirtual Address: {:X}\nSize of Raw Data: {}",
                             section_info.name,
@@ -73,20 +67,17 @@ fn main()
                 }
             }
 
-            match process_info.get_peb_base_address()
-            {
+            match process_info.get_peb_base_address() {
                 Ok(peb_address) => println!("PEB Base Address: {:?}", peb_address),
                 Err(e) => eprintln!("Error: {}", e),
             }
 
-            match process_info.is_wow64()
-            {
+            match process_info.is_wow64() {
                 Ok(is_wow64) => println!("WoW64 Emulation: {}", is_wow64),
                 Err(e) => eprintln!("Error: {}", e),
             }
 
-            match process_info.is_protected_process()
-            {
+            match process_info.is_protected_process() {
                 Ok(is_protected) => println!("Is Protected Process: {}", is_protected),
                 Err(e) => eprintln!("Error: {}", e),
             }
