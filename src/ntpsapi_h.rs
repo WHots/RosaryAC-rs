@@ -135,6 +135,4 @@ extern "system" {
         RequiredPrivileges: *mut PRIVILEGE_SET,
         Result: *mut BOOLEAN,
     ) -> NTSTATUS;
-
-    // You can add more functions from ntdll here.
 }
