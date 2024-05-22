@@ -1,5 +1,6 @@
 use std::ffi::c_void;
-use windows_sys::Win32::Foundation::{HANDLE, NTSTATUS};
+use windows_sys::Win32::Foundation::{BOOLEAN, HANDLE, NTSTATUS};
+use windows_sys::Win32::Security::PRIVILEGE_SET;
 use windows_sys::Win32::System::Threading::PROCESS_BASIC_INFORMATION;
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 
@@ -110,8 +111,7 @@ pub enum THREADINFOCLASS
 
 
 #[link(name = "ntdll")]
-extern "system"
-{
+extern "system" {
     pub fn NtQueryInformationProcess(
         ProcessHandle: HANDLE,
         ProcessInformationClass: u32,
@@ -119,12 +119,8 @@ extern "system"
         ProcessInformationLength: u32,
         ReturnLength: *mut u32,
     ) -> NTSTATUS;
-}
 
 
-#[link(name = "ntdll")]
-extern "system"
-{
     pub fn NtQueryInformationThread(
         ThreadHandle: HANDLE,
         ThreadInformationClass: THREADINFOCLASS,
@@ -132,4 +128,13 @@ extern "system"
         ThreadInformationLength: u32,
         ReturnLength: *mut u32,
     ) -> NTSTATUS;
+
+
+    pub fn NtPrivilegeCheck(
+        ClientToken: HANDLE,
+        RequiredPrivileges: *mut PRIVILEGE_SET,
+        Result: *mut BOOLEAN,
+    ) -> NTSTATUS;
+
+    // You can add more functions from ntdll here.
 }

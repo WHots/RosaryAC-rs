@@ -3,18 +3,17 @@ use std::ffi::{c_void, OsStr, OsString};
 use std::{mem, ptr};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID};
+use windows_sys::Win32::Foundation::{BOOLEAN, CloseHandle, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID, NTSTATUS, STATUS_SUCCESS};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessId, GetProcessIdOfThread, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_QUERY_INFORMATION};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 
-use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_INFORMATION_CLASS, TOKEN_PRIVILEGES, TOKEN_QUERY};
-use TokenInformationClass::TokenPrivileges;
+use windows_sys::Win32::Security::{LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SE_PRIVILEGE_ENABLED, TOKEN_ACCESS_MASK, TOKEN_INFORMATION_CLASS, TOKEN_PRIVILEGES, TOKEN_QUERY};
+use windows_sys::Win32::System::SystemServices::PRIVILEGE_SET_ALL_NECESSARY;
 
 use crate::memorymanage::CleanHandle;
-use crate::ntpsapi_h::{NtQueryInformationProcess, NtQueryInformationThread, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
-use crate::winnt_h::TokenInformationClass;
+use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInformationThread, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
 
 
 impl PROCESS_EXTENDED_BASIC_INFORMATION
@@ -38,6 +37,9 @@ pub struct ProcessInfo
     pid: u32,
     process_handle: HANDLE,
 }
+
+
+const TokenAccessType: TOKEN_ACCESS_MASK = TOKEN_QUERY;
 
 
 impl ProcessInfo
@@ -476,60 +478,65 @@ impl ProcessInfo
     }
 
 
-    /// This function checks if a process has a specified privilege enabled.
+    //// Checks if the current process has a specified privilege enabled.
     ///
     /// # Arguments
-    /// * `privilege_luid` - The LUID (Locally Unique Identifier) of the privilege to check.
+    /// * `privilege_type` - The name of the privilege to check, as a string slice.
     ///
     /// # Returns
-    /// * `true` if the process has the specified privilege, otherwise `false`.
+    /// An `i32` value:
+    /// - `1` if the process has the specified privilege enabled.
+    /// - `-1` if the process does not have the privilege or if an error occurs.
     ///
     /// # Safety
-    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
-    pub fn has_privilege(&self, privilege_luid: LUID) -> bool
+    /// This function contains unsafe code that interacts with the Windows API for Foreign Function Interface (FFI) operations. It calls several Windows API functions that require careful handling to maintain safety guarantees. The caller must ensure that the provided `privilege_type` is valid and that the function is used in a context where the necessary privileges are held by the process.
+    fn is_token_present(privilege_type: &str) -> i32
     {
 
-        let mut token_handle: HANDLE = 0;
+        let fail = -1;
+        let mut status: NTSTATUS = 0;
 
-        let result = unsafe { OpenProcessToken(self.process_handle, TOKEN_QUERY, &mut token_handle) };
+        let privilege_type_wide: Vec<u16> = privilege_type.encode_utf16().chain(Some(0)).collect();
 
-        let clean_handle = match CleanHandle::new(token_handle) {
-            Some(handle) => handle,
-            None => return false,
+        let mut luid = LUID { LowPart: 0, HighPart: 0 };
+
+        if unsafe { LookupPrivilegeValueW(ptr::null(), privilege_type_wide.as_ptr(), &mut luid) } == 0 {
+            return fail;
+        }
+
+        let mut required_privileges = PRIVILEGE_SET {
+            PrivilegeCount: 1,
+            Control: PRIVILEGE_SET_ALL_NECESSARY,
+            Privilege: [LUID_AND_ATTRIBUTES {
+                Luid: luid,
+                Attributes: SE_PRIVILEGE_ENABLED,
+            }; 1],
         };
 
-        let mut return_length = 0;
+        let mut token_handle: HANDLE = INVALID_HANDLE_VALUE;
+        let process_handle = unsafe { GetCurrentProcess() };
 
-        let result = unsafe { GetTokenInformation(clean_handle.as_raw(), 2 as TOKEN_INFORMATION_CLASS, ptr::null_mut(), 0, &mut return_length) };
+        let res = unsafe { OpenProcessToken(process_handle, TokenAccessType, &mut token_handle) };
+        if res == 0 {
 
-        if result == 0 && return_length == 0
-        {
-            return false;
+            return fail;
         }
 
-        let mut token_privileges_vec = vec![0u8; return_length as usize];
-        let token_privileges = token_privileges_vec.as_mut_ptr() as *mut TOKEN_PRIVILEGES;
+        let safe_handle = match CleanHandle::new(token_handle) {
+            Some(handle) => handle,
+            None => return fail,
+        };
 
-        let result = unsafe { GetTokenInformation(clean_handle.as_raw(), 2 as TOKEN_INFORMATION_CLASS, token_privileges as *mut _, return_length, &mut return_length) };
+        let mut has_privilege: BOOLEAN = 0;
 
-        if result == 0
-        {
-            return false;
+        status = unsafe { NtPrivilegeCheck(safe_handle.as_raw(), &mut required_privileges, &mut has_privilege) };
+
+        if status == STATUS_SUCCESS && has_privilege != 0 {
+            1
         }
-
-        let privileges: &TOKEN_PRIVILEGES = unsafe { &*token_privileges };
-
-        for i in 0..privileges.PrivilegeCount
-        {
-            let luid = privileges.Privileges[i as usize].Luid;
-
-            if luid.LowPart == privilege_luid.LowPart && luid.HighPart == privilege_luid.HighPart
-            {
-                return true;
-            }
+        else {
+            fail
         }
-
-        false
     }
 
 

@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use windows_sys::Win32::Foundation::{HANDLE, MAX_PATH};
+use windows_sys::Win32::Security::SE_DEBUG_NAME;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 
 mod processutils;
@@ -24,7 +25,7 @@ const PROCESS_FLAGS: u32 = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION;
 //  Testing stuff in here, so it will probably be very random.
 
 fn main() {
-    let pid: u32 = 1220; //unsafe { GetCurrentProcessId() };
+    let pid: u32 = 1996;//unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 
     let process_info = ProcessInfo::new(pid, process_handle);
@@ -38,6 +39,8 @@ fn main() {
     match unsafe { process_info.get_process_image_path_ex(&mut buffer, &mut output) } {
         Ok(path) => unsafe {
             println!("{:?}", path);
+
+
 
             match get_file_internal_name(path) {
                 Ok(internal_name) => println!("Internal Name: {:?}", internal_name),
