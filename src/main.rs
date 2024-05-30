@@ -10,22 +10,30 @@ mod peutils;
 mod ntpsapi_h;
 mod memorymanage;
 mod winnt_h;
+mod stringutils;
 
 use crate::processutils::ProcessInfo;
 use crate::fileutils::get_file_internal_name;
 use crate::fileutils::get_file_entropy;
 
-use crate::peutils::display_section_info;
+use crate::peutils::{display_section_info, iterate_iat};
 
 
-const PROCESS_FLAGS: u32 = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION;
+const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
 
 
 
 //  Testing stuff in here, so it will probably be very random.
 
+
+
+
+
+
+
+
 fn main() {
-    let pid: u32 = 1996;//unsafe { GetCurrentProcessId() };
+    let pid: u32 = unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 
     let process_info = ProcessInfo::new(pid, process_handle);
@@ -55,6 +63,10 @@ fn main() {
                     println!("Base Address: {:?}", base_address);
                     println!("Size of Image: {}", size_of_image);
 
+                    match iterate_iat(process_handle, base_address) {
+                        Ok(()) => println!("IAT donzo."),
+                        Err(e) => println!("Error IAT fffff: {}", e),
+                    }
 
                 }
                 Err(err) => {

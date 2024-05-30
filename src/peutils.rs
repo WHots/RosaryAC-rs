@@ -1,11 +1,17 @@
-use std::ffi::{c_void, CStr};
+use std::ffi::{c_void};
 use std::{mem, slice};
-use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Foundation::{HANDLE};
 use windows_sys::Win32::System::Diagnostics::Debug::{IMAGE_NT_HEADERS64, IMAGE_SECTION_HEADER};
 use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQueryEx};
 use windows_sys::Win32::System::SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_IMPORT_DESCRIPTOR, IMAGE_NT_SIGNATURE};
 use windows_sys::Win32::System::WindowsProgramming::IMAGE_THUNK_DATA64;
 use crate::memoryutils;
+use crate::stringutils::read_c_string;
+
+
+
+
+
 
 
 #[repr(C)]
@@ -17,90 +23,18 @@ pub struct SectionInfo
 }
 
 
+
 const IMAGE_DIRECTORY_ENTRY_IMPORT: usize = 1;
 
 
 
 
-/// Retrieves the NT headers of a PE file loaded in the target process.
+
+/// Iterates over the Import Address Table (IAT) of a PE file in the specified process, printing the names of imported functions and their addresses.
 ///
-/// # Arguments
+/// # Safety
 ///
-/// * `process_handle` - A handle to the process containing the PE file.
-/// * `base` - The base address of the PE file in the process's memory.
-///
-/// # Returns
-///
-/// A `Result` containing the `IMAGE_NT_HEADERS64` if successful, or an error string otherwise.
-fn get_nt_headers(process_handle: HANDLE, base: *const u8) -> Result<IMAGE_NT_HEADERS64, String>
-{
-
-    let dos_header: IMAGE_DOS_HEADER = memoryutils::read_memory(process_handle, base)?;
-
-    if dos_header.e_magic != IMAGE_DOS_SIGNATURE
-    {
-        return Err("Invalid DOS signature".into());
-    }
-
-    let nt_headers_address = unsafe { base.add(dos_header.e_lfanew as usize) };
-    let nt_headers: IMAGE_NT_HEADERS64 = memoryutils::read_memory(process_handle, nt_headers_address)?;
-
-    if nt_headers.Signature != IMAGE_NT_SIGNATURE
-    {
-        return Err("Invalid NT signature".into());
-    }
-
-    Ok(nt_headers)
-}
-
-
-/// Retrieves the import descriptors of a PE file loaded in the target process.
-///
-/// # Arguments
-///
-/// * `process_handle` - A handle to the process containing the PE file.
-/// * `nt_headers` - A reference to the NT headers of the PE file.
-/// * `base` - The base address of the PE file in the process's memory.
-///
-/// # Returns
-///
-/// A `Result` containing a vector of `IMAGE_IMPORT_DESCRIPTOR` if successful, or an error string otherwise.
-fn get_import_descriptors(process_handle: HANDLE, nt_headers: &IMAGE_NT_HEADERS64, base: *const u8) -> Result<Vec<IMAGE_IMPORT_DESCRIPTOR>, String>
-{
-
-    let import_directory = nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-
-    if import_directory.VirtualAddress == 0
-    {
-        return Err("No import directory found".into());
-    }
-
-    let import_descriptor_address = unsafe { base.add(import_directory.VirtualAddress as usize) };
-    let num_descriptors = import_directory.Size / mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>() as u32;
-    let mut import_descriptors = Vec::with_capacity(num_descriptors as usize);
-
-    unsafe {
-        for i in 0..num_descriptors
-        {
-            let descriptor: IMAGE_IMPORT_DESCRIPTOR = memoryutils::read_memory(
-                process_handle,
-                import_descriptor_address.add(i as usize * mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>()) as *const u8
-            )?;
-
-            if descriptor.Name == 0
-            {
-                break;
-            }
-
-            import_descriptors.push(descriptor);
-        }
-    }
-
-    Ok(import_descriptors)
-}
-
-
-/// Iterates over the Import Address Table (IAT) of a PE file loaded in the target process.
+/// This function is unsafe due to raw pointer dereferencing and handling of external process memory.
 ///
 /// # Arguments
 ///
@@ -110,13 +44,14 @@ fn get_import_descriptors(process_handle: HANDLE, nt_headers: &IMAGE_NT_HEADERS6
 /// # Returns
 ///
 /// A `Result` indicating success or an error string if any error occurs.
-fn iterate_iat(process_handle: HANDLE, base: *const u8) -> Result<(), String>
+pub fn iterate_iat(process_handle: HANDLE, base: *const u8) -> Result<(), String>
 {
 
     let nt_headers = get_nt_headers(process_handle, base)?;
     let import_descriptors = get_import_descriptors(process_handle, &nt_headers, base)?;
 
     unsafe {
+
         for descriptor in import_descriptors.iter()
         {
             if descriptor.Name == 0
@@ -125,22 +60,50 @@ fn iterate_iat(process_handle: HANDLE, base: *const u8) -> Result<(), String>
             }
 
             let name_address = base.add(descriptor.Name as usize);
-            let name = memoryutils::read_memory::<[u8; 128]>(process_handle, name_address)?;
-            let cstr_name = CStr::from_ptr(name.as_ptr() as *const i8);
 
-            println!("Importing from: {:?}", cstr_name);
+            match read_c_string(process_handle, name_address)
+            {
+                Ok(module_name) => println!("Importing from: {}", module_name),
+                Err(e) => {
+                    eprintln!("Error reading module name: {}", e);
+                    continue;
+                }
+            }
 
+            let original_thunk_address = base.add(descriptor.Anonymous.OriginalFirstThunk as usize);
             let thunk_address = base.add(descriptor.FirstThunk as usize);
             let mut i = 0;
 
             loop {
-                let thunk_data: IMAGE_THUNK_DATA64 = memoryutils::read_memory(process_handle, thunk_address.add(i * mem::size_of::<IMAGE_THUNK_DATA64>()) as *const u8)?;
 
-                if thunk_data.u1.Function == 0
+                let original_thunk_data: IMAGE_THUNK_DATA64 = match memoryutils::read_memory(process_handle, original_thunk_address.add(i * mem::size_of::<IMAGE_THUNK_DATA64>()) as *const u8) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        eprintln!("Error reading original thunk data: {}", e);
+                        break;
+                    }
+                };
+
+                let thunk_data: IMAGE_THUNK_DATA64 = match memoryutils::read_memory(process_handle, thunk_address.add(i * mem::size_of::<IMAGE_THUNK_DATA64>()) as *const u8) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        eprintln!("Error reading thunk data: {}", e);
+                        break;
+                    }
+                };
+
+                if original_thunk_data.u1.AddressOfData == 0
                 {
                     break;
                 }
-                println!("Imported function address: {:?}", thunk_data.u1.Function as *const c_void);
+
+                let func_name_address = base.add(original_thunk_data.u1.AddressOfData as usize) as *const u8;
+
+                match read_c_string(process_handle, func_name_address)
+                {
+                    Ok(function_name) => println!("Imported function name: {}, address: {:?}", function_name, thunk_data.u1.Function as *const c_void),
+                    Err(e) => eprintln!("Error reading function name: {}", e),
+                }
 
                 i += 1;
             }
@@ -204,4 +167,84 @@ pub unsafe fn display_section_info(section_name: &str, process_handle: HANDLE, b
     }
 
     Ok(None)
+}
+
+
+/// Retrieves the NT headers of a PE file loaded in the target process.
+///
+/// # Arguments
+///
+/// * `process_handle` - A handle to the process containing the PE file.
+/// * `base` - The base address of the PE file in the process's memory.
+///
+/// # Returns
+///
+/// A `Result` containing the `IMAGE_NT_HEADERS64` if successful, or an error string otherwise.
+#[inline]
+fn get_nt_headers(process_handle: HANDLE, base: *const u8) -> Result<IMAGE_NT_HEADERS64, String>
+{
+
+    let dos_header: IMAGE_DOS_HEADER = memoryutils::read_memory(process_handle, base)?;
+
+    if dos_header.e_magic != IMAGE_DOS_SIGNATURE
+    {
+        return Err("Invalid DOS signature".into());
+    }
+
+    let nt_headers_address = unsafe { base.add(dos_header.e_lfanew as usize) };
+    let nt_headers: IMAGE_NT_HEADERS64 = memoryutils::read_memory(process_handle, nt_headers_address)?;
+
+    if nt_headers.Signature != IMAGE_NT_SIGNATURE
+    {
+        return Err("Invalid NT signature".into());
+    }
+
+    Ok(nt_headers)
+}
+
+
+/// Retrieves the import descriptors of a PE file loaded in the target process.
+///
+/// # Arguments
+///
+/// * `process_handle` - A handle to the process containing the PE file.
+/// * `nt_headers` - A reference to the NT headers of the PE file.
+/// * `base` - The base address of the PE file in the process's memory.
+///
+/// # Returns
+///
+/// A `Result` containing a vector of `IMAGE_IMPORT_DESCRIPTOR` if successful, or an error string otherwise.
+#[inline]
+fn get_import_descriptors(process_handle: HANDLE, nt_headers: &IMAGE_NT_HEADERS64, base: *const u8) -> Result<Vec<IMAGE_IMPORT_DESCRIPTOR>, String>
+{
+
+    let import_directory = nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+
+    if import_directory.VirtualAddress == 0
+    {
+        return Err("No import directory found".into());
+    }
+
+    let import_descriptor_address = unsafe { base.add(import_directory.VirtualAddress as usize) };
+    let num_descriptors = import_directory.Size / mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>() as u32;
+    let mut import_descriptors = Vec::with_capacity(num_descriptors as usize);
+
+    unsafe {
+        for i in 0..num_descriptors
+        {
+            let descriptor: IMAGE_IMPORT_DESCRIPTOR = memoryutils::read_memory(
+                process_handle,
+                import_descriptor_address.add(i as usize * mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>()) as *const u8
+            )?;
+
+            if descriptor.Name == 0
+            {
+                break;
+            }
+
+            import_descriptors.push(descriptor);
+        }
+    }
+
+    Ok(import_descriptors)
 }

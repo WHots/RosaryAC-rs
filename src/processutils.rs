@@ -72,34 +72,27 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<(HMODULE, usize), String>` - The handle and size of the main module or an error.
-    pub fn get_main_module_ex(&self) -> Result<(*mut c_void, usize), String>
-    {
-
-        if self.process_handle == 0
-        {
+    pub fn get_main_module_ex(&self) -> Result<(*const u8, usize), String> {
+        if self.process_handle == 0 {
             return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
         }
-
 
         let mut h_module: HMODULE = unsafe { std::mem::zeroed() };
         let mut cb_needed: u32 = 0;
 
-        if unsafe { EnumProcessModulesEx(self.process_handle, &mut h_module, std::mem::size_of_val(&h_module) as u32, &mut cb_needed, LIST_MODULES_ALL) == 0 }
-        {
-            unsafe { return Err(format!("Failed to enumerate process modules. Error code: {}", GetLastError())); }
+        if unsafe { EnumProcessModulesEx(self.process_handle, &mut h_module, std::mem::size_of_val(&h_module) as u32, &mut cb_needed, LIST_MODULES_ALL) == 0 } {
+            return Err(format!("Failed to enumerate process modules. Error code: {}", unsafe { GetLastError() }));
         }
 
         let mut module_info: MODULEINFO = unsafe { std::mem::zeroed() };
 
-        if unsafe { GetModuleInformation(self.process_handle, h_module, &mut module_info, std::mem::size_of::<MODULEINFO>() as u32) == 0 }
-        {
+        if unsafe { GetModuleInformation(self.process_handle, h_module, &mut module_info, std::mem::size_of::<MODULEINFO>() as u32) == 0 } {
             return Err(format!("Failed to get module information. Error code: {}", unsafe { GetLastError() }));
         }
 
-        let base_address: *mut c_void = module_info.lpBaseOfDll as *mut c_void;
+        let base_address: *const u8 = module_info.lpBaseOfDll as *const u8;
 
-        if base_address.is_null()
-        {
+        if base_address.is_null() {
             return Err("Module base address is null.".to_string());
         }
 
