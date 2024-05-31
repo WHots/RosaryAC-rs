@@ -3,18 +3,33 @@ use std::ffi::{c_void, OsStr, OsString};
 use std::{mem, ptr};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
-use windows_sys::Win32::Foundation::{BOOLEAN, CloseHandle, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID, NTSTATUS, STATUS_SUCCESS};
+use windows_sys::Win32::Foundation::{BOOL, BOOLEAN, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID, NTSTATUS, STATUS_SUCCESS};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessId, GetProcessIdOfThread, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_QUERY_INFORMATION};
+use windows_sys::Win32::System::Threading::{GetProcessIdOfThread, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_ACCESS_RIGHTS, THREAD_QUERY_INFORMATION};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 
-use windows_sys::Win32::Security::{LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SE_PRIVILEGE_ENABLED, TOKEN_ACCESS_MASK, TOKEN_INFORMATION_CLASS, TOKEN_PRIVILEGES, TOKEN_QUERY};
+use windows_sys::Win32::Security::{GetTokenInformation, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SE_PRIVILEGE_ENABLED, TOKEN_ACCESS_MASK, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows_sys::Win32::System::SystemServices::PRIVILEGE_SET_ALL_NECESSARY;
 
 use crate::memorymanage::CleanHandle;
 use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInformationThread, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
 
+
+
+
+
+macro_rules! check_process_handle {
+    ($handle:expr) => {
+        if $handle == 0 {
+            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
+        }
+    };
+}
+
+
+const TokenAccessType: TOKEN_ACCESS_MASK = TOKEN_QUERY;
+const ThreadAccessType: THREAD_ACCESS_RIGHTS = THREAD_QUERY_INFORMATION;
 
 impl PROCESS_EXTENDED_BASIC_INFORMATION
 {
@@ -31,16 +46,11 @@ impl PROCESS_EXTENDED_BASIC_INFORMATION
 
 
 
-
 pub struct ProcessInfo
 {
     pid: u32,
     process_handle: HANDLE,
 }
-
-
-const TokenAccessType: TOKEN_ACCESS_MASK = TOKEN_QUERY;
-
 
 impl ProcessInfo
 {
@@ -73,9 +83,8 @@ impl ProcessInfo
     ///
     /// * `Result<(HMODULE, usize), String>` - The handle and size of the main module or an error.
     pub fn get_main_module_ex(&self) -> Result<(*const u8, usize), String> {
-        if self.process_handle == 0 {
-            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
-        }
+
+        check_process_handle!(self.process_handle);
 
         let mut h_module: HMODULE = unsafe { std::mem::zeroed() };
         let mut cb_needed: u32 = 0;
@@ -111,6 +120,8 @@ impl ProcessInfo
     /// A `Result` containing a vector of module handles if successful, or an error string otherwise.
     pub fn get_process_modules(&self) -> Result<Vec<HMODULE>, String>
     {
+
+        check_process_handle!(self.process_handle);
 
         let mut modules: Vec<HMODULE> = Vec::with_capacity(1024);
 
@@ -163,6 +174,8 @@ impl ProcessInfo
     pub fn get_process_image_path_ex<'a>(&self, buffer: &'a mut Vec<u16>, output: &'a mut OsString) -> Result<&'a OsStr, &'static str>
     {
 
+        check_process_handle!(self.process_handle);
+
         const MAX_PATH: usize = 260;
         buffer.resize(MAX_PATH, 0);
 
@@ -197,10 +210,7 @@ impl ProcessInfo
     pub fn is_debugger(&self) -> Result<bool, String>
     {
 
-        if self.process_handle == 0
-        {
-            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
-        }
+        check_process_handle!(self.process_handle);
 
         let mut debug_port: isize = 0;
         let mut return_length: u32 = 0;
@@ -236,11 +246,7 @@ impl ProcessInfo
     pub fn get_peb_base_address(&self) -> Result<*mut PEB, String>
     {
 
-        if self.process_handle == 0
-        {
-            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
-        }
-
+        check_process_handle!(self.process_handle);
 
         let mut pbi: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         let mut return_length: u32 = 0;
@@ -276,11 +282,7 @@ impl ProcessInfo
     pub fn is_wow64(&self) -> Result<bool, String>
     {
 
-        if self.process_handle == 0
-        {
-            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
-        }
-
+        check_process_handle!(self.process_handle);
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = PROCESS_EXTENDED_BASIC_INFORMATION::new();
         pebi.Size = size_of::<PROCESS_EXTENDED_BASIC_INFORMATION>();
@@ -319,11 +321,7 @@ impl ProcessInfo
     pub fn is_protected_process(&self) -> Result<bool, String>
     {
 
-        if self.process_handle == 0
-        {
-            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
-        }
-
+        check_process_handle!(self.process_handle);
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         pebi.Size = std::mem::size_of::<PROCESS_EXTENDED_BASIC_INFORMATION>();
@@ -362,11 +360,7 @@ impl ProcessInfo
     pub fn is_secure_process(&self) -> Result<bool, String>
     {
 
-        if self.process_handle == 0
-        {
-            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
-        }
-
+        check_process_handle!(self.process_handle);
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         pebi.Size = std::mem::size_of::<PROCESS_EXTENDED_BASIC_INFORMATION>();
@@ -393,6 +387,61 @@ impl ProcessInfo
     }
 
 
+    /// Checks if the process associated with the provided handle is running with elevated privileges.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the function fails to open the process token or retrieve the token information.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(true)` if the process is elevated, or `Ok(false)` otherwise.
+    pub fn is_process_elevated(&self) -> Result<bool, String>
+    {
+
+        check_process_handle!(self.process_handle);
+
+        let mut token_handle: HANDLE = 0;
+
+        let token_opened: BOOL = unsafe {
+            OpenProcessToken(
+                self.process_handle,
+                TokenAccessType,
+                &mut token_handle,
+            )
+        };
+
+        if token_opened == 0 {
+            return Err(format!("No Process Token Opened: {}", unsafe { GetLastError() }));
+        }
+
+        let safe_handle = match CleanHandle::new(token_handle) {
+            Some(handle) => handle,
+            None => return Ok(false)
+        };
+
+        let mut elevation: TOKEN_ELEVATION = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut size: u32 = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
+
+        let token_info: BOOL = unsafe {
+            GetTokenInformation(
+                safe_handle.as_raw(),
+                TokenElevation,
+                &mut elevation as *mut _ as *mut _,
+                size,
+                &mut size,
+            )
+        };
+
+        if token_info == 0
+        {
+            return Err(format!("Token Information Was Zero: {}", unsafe { GetLastError() }));
+        }
+
+        Ok(elevation.TokenIsElevated != 0)
+    }
+
+
     /// Enumerates the threads associated with the process and counts them.
     ///
     /// This method creates a snapshot of the threads for the process identified by `self.pid`
@@ -410,6 +459,8 @@ impl ProcessInfo
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
     pub fn query_thread_information(&self) -> HashMap<String, usize>
     {
+
+        //  ...
 
         let mut counts = HashMap::new();
 
@@ -437,7 +488,7 @@ impl ProcessInfo
                     {
                         total_count += 1;
 
-                        let h_thread = OpenThread(THREAD_QUERY_INFORMATION, 0, thread_entry.th32ThreadID);
+                        let h_thread = OpenThread(ThreadAccessType, 0, thread_entry.th32ThreadID);
 
                         if let Some(thread_handle) = CleanHandle::new(h_thread)
                         {
@@ -483,8 +534,10 @@ impl ProcessInfo
     ///
     /// # Safety
     /// This function contains unsafe code that interacts with the Windows API for Foreign Function Interface (FFI) operations. It calls several Windows API functions that require careful handling to maintain safety guarantees. The caller must ensure that the provided `privilege_type` is valid and that the function is used in a context where the necessary privileges are held by the process.
-    fn is_token_present(privilege_type: &str) -> i32
+    fn is_token_present(&self, privilege_type: &str) -> i32
     {
+
+        check_process_handle!(self.process_handle);
 
         let fail = -1;
         let mut status: NTSTATUS = 0;
@@ -507,9 +560,8 @@ impl ProcessInfo
         };
 
         let mut token_handle: HANDLE = INVALID_HANDLE_VALUE;
-        let process_handle = unsafe { GetCurrentProcess() };
 
-        let res = unsafe { OpenProcessToken(process_handle, TokenAccessType, &mut token_handle) };
+        let res = unsafe { OpenProcessToken(self.process_handle, TokenAccessType, &mut token_handle) };
         if res == 0 {
 
             return fail;
