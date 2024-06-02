@@ -15,6 +15,7 @@ use crate::stringutils::read_c_string;
 
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct SectionInfo
 {
     pub name: String,
@@ -44,69 +45,66 @@ const IMAGE_DIRECTORY_ENTRY_IMPORT: usize = 1;
 /// # Returns
 ///
 /// A `Result` indicating success or an error string if any error occurs.
-pub fn iterate_iat(process_handle: HANDLE, base: *const u8) -> Result<(), String>
+pub fn iterate_iat(process_handle: HANDLE, base: *const u8) -> Result<(), String> 
 {
 
     let nt_headers = get_nt_headers(process_handle, base)?;
     let import_descriptors = get_import_descriptors(process_handle, &nt_headers, base)?;
 
-    unsafe {
-
-        for descriptor in import_descriptors.iter()
+    for descriptor in import_descriptors.iter() 
+    {
+        if descriptor.Name == 0 
         {
-            if descriptor.Name == 0
+            break;
+        }
+
+        let name_address = unsafe { base.add(descriptor.Name as usize) };
+
+        match read_c_string(process_handle, name_address) 
+        {
+            Ok(module_name) => println!("Importing from: {}", module_name),
+            Err(e) => {
+                eprintln!("Error reading module name: {}", e);
+                continue;
+            }
+        }
+
+        let original_thunk_address = unsafe { base.add(descriptor.Anonymous.OriginalFirstThunk as usize) };
+        let thunk_address = unsafe { base.add(descriptor.FirstThunk as usize) };
+        let mut i = 0;
+
+        loop {
+
+            let original_thunk_data: IMAGE_THUNK_DATA64 = match memoryutils::read_memory(process_handle, unsafe { original_thunk_address.add(i * mem::size_of::<IMAGE_THUNK_DATA64>()) } as *const u8,) {
+                Ok(data) => data,
+                Err(e) => {
+                    eprintln!("Error reading original thunk data: {}", e);
+                    break;
+                }
+            };
+
+            let thunk_data: IMAGE_THUNK_DATA64 = match memoryutils::read_memory(process_handle, unsafe { thunk_address.add(i * mem::size_of::<IMAGE_THUNK_DATA64>()) } as *const u8,) {
+                Ok(data) => data,
+                Err(e) => {
+                    eprintln!("Error reading thunk data: {}", e);
+                    break;
+                }
+            };
+
+            if unsafe { original_thunk_data.u1.AddressOfData } == 0 
             {
                 break;
             }
 
-            let name_address = base.add(descriptor.Name as usize);
+            let func_name_address = unsafe { base.add(original_thunk_data.u1.AddressOfData as usize) } as *const u8;
 
-            match read_c_string(process_handle, name_address)
+            match read_c_string(process_handle, func_name_address) 
             {
-                Ok(module_name) => println!("Importing from: {}", module_name),
-                Err(e) => {
-                    eprintln!("Error reading module name: {}", e);
-                    continue;
-                }
+                Ok(function_name) => println!("Imported function name: {}, address: {:?}", function_name, unsafe { thunk_data.u1.Function } as *const c_void),
+                Err(e) => eprintln!("Error reading function name: {}", e),
             }
 
-            let original_thunk_address = base.add(descriptor.Anonymous.OriginalFirstThunk as usize);
-            let thunk_address = base.add(descriptor.FirstThunk as usize);
-            let mut i = 0;
-
-            loop {
-
-                let original_thunk_data: IMAGE_THUNK_DATA64 = match memoryutils::read_memory(process_handle, original_thunk_address.add(i * mem::size_of::<IMAGE_THUNK_DATA64>()) as *const u8) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        eprintln!("Error reading original thunk data: {}", e);
-                        break;
-                    }
-                };
-
-                let thunk_data: IMAGE_THUNK_DATA64 = match memoryutils::read_memory(process_handle, thunk_address.add(i * mem::size_of::<IMAGE_THUNK_DATA64>()) as *const u8) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        eprintln!("Error reading thunk data: {}", e);
-                        break;
-                    }
-                };
-
-                if original_thunk_data.u1.AddressOfData == 0
-                {
-                    break;
-                }
-
-                let func_name_address = base.add(original_thunk_data.u1.AddressOfData as usize) as *const u8;
-
-                match read_c_string(process_handle, func_name_address)
-                {
-                    Ok(function_name) => println!("Imported function name: {}, address: {:?}", function_name, thunk_data.u1.Function as *const c_void),
-                    Err(e) => eprintln!("Error reading function name: {}", e),
-                }
-
-                i += 1;
-            }
+            i += 1;
         }
     }
 
@@ -129,36 +127,37 @@ pub fn iterate_iat(process_handle: HANDLE, base: *const u8) -> Result<(), String
 /// # Returns
 ///
 /// A `Result` containing an optional `SectionInfo` struct with information about the section, or an error string if any error occurs.
-pub unsafe fn display_section_info(section_name: &str, process_handle: HANDLE, base: *const c_void) -> Result<Option<SectionInfo>, String>
+pub unsafe fn display_section_info(section_name: &str, process_handle: HANDLE, base: *const c_void,) -> Result<Option<SectionInfo>, String> 
 {
 
     let mut memory_info: MEMORY_BASIC_INFORMATION = mem::zeroed();
     let mut base_address = base as usize;
 
-    while VirtualQueryEx(process_handle, base_address as _, &mut memory_info, mem::size_of::<MEMORY_BASIC_INFORMATION>()) != 0
+    while VirtualQueryEx(process_handle,base_address as _,&mut memory_info,mem::size_of::<MEMORY_BASIC_INFORMATION>(),) != 0 
     {
         let headers = (memory_info.BaseAddress as *const IMAGE_NT_HEADERS64).read_unaligned();
         let sections_start = headers.OptionalHeader.DataDirectory[2].VirtualAddress as usize;
         let section_headers = (memory_info.BaseAddress as usize + sections_start) as *const IMAGE_SECTION_HEADER;
 
-        for i in 0..headers.FileHeader.NumberOfSections
+        for i in 0..headers.FileHeader.NumberOfSections 
         {
-            let section = memoryutils::read_memory::<IMAGE_SECTION_HEADER>(
-                process_handle,
-                section_headers.add(i as usize) as *const u8
-            )?;
+            let section = memoryutils::read_memory::<IMAGE_SECTION_HEADER>(process_handle, section_headers.add(i as usize) as *const u8,)?;
 
             let name_bytes = slice::from_raw_parts(section.Name.as_ptr(), 8);
             let name_end = name_bytes.iter().position(|&c| c == 0).unwrap_or(8);
             let name = std::str::from_utf8(&name_bytes[..name_end]).map_err(|_| "Invalid section name".to_string())?;
 
-            if name.starts_with(section_name)
+            if name.starts_with(section_name) 
             {
-                return Ok(Some(SectionInfo { name: name.to_string(), virtual_address: section.VirtualAddress, size_of_raw_data: section.SizeOfRawData, }));
+                return Ok(Some(SectionInfo {
+                    name: name.to_string(),
+                    virtual_address: section.VirtualAddress,
+                    size_of_raw_data: section.SizeOfRawData,
+                }));
             }
         }
 
-        if memory_info.RegionSize == 0
+        if memory_info.RegionSize == 0 
         {
             break;
         }

@@ -1,9 +1,10 @@
-use std::ffi::OsString;
+use std::ffi::{c_void, OsString};
+use peutils::display_section_info;
 use windows_sys::Win32::Foundation::{HANDLE, MAX_PATH};
 use windows_sys::Win32::Security::SE_DEBUG_NAME;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 
-mod processutils;
+mod processprofiler;
 mod memoryutils;
 mod fileutils;
 mod peutils;
@@ -12,11 +13,11 @@ mod memorymanage;
 mod winnt_h;
 mod stringutils;
 
-use crate::processutils::ProcessInfo;
+use crate::processprofiler::ProcessInfo;
 use crate::fileutils::get_file_internal_name;
 use crate::fileutils::get_file_entropy;
 
-use crate::peutils::{display_section_info, iterate_iat};
+use crate::peutils::{iterate_iat};
 
 
 const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
@@ -28,12 +29,8 @@ const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
 
 
 
-
-
-
-
 fn main() {
-    let pid: u32 = unsafe { GetCurrentProcessId() };
+    let pid: u32 = 12752; // unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 
     let process_info = ProcessInfo::new(pid, process_handle);
@@ -44,17 +41,15 @@ fn main() {
     let violent_threads = process_info.query_thread_information();
     println!("Violent Threads: {:?}", violent_threads);
 
-    match unsafe { process_info.get_process_image_path_ex(&mut buffer, &mut output) } {
-        Ok(path) => unsafe {
+    match process_info.get_process_image_path_ex(&mut buffer, &mut output) {
+        Ok(path) => {
             println!("{:?}", path);
 
-
-
-            match get_file_internal_name(path) {
+            match get_file_internal_name(&path) {
                 Ok(internal_name) => println!("Internal Name: {:?}", internal_name),
                 Err(e) => eprintln!("Error: {}", e),
             }
-            match get_file_entropy(path) {
+            match get_file_entropy(&path) {
                 Ok(entropy) => println!("The entropy of the file is: {}", entropy),
                 Err(e) => println!("{}", e),
             }
@@ -64,10 +59,15 @@ fn main() {
                     println!("Size of Image: {}", size_of_image);
 
                     match iterate_iat(process_handle, base_address) {
-                        Ok(()) => println!("IAT donzo."),
-                        Err(e) => println!("Error IAT fffff: {}", e),
+                        Ok(()) => println!("IAT done."),
+                        Err(e) => println!("Error iterating IAT: {}", e),
                     }
 
+                    match unsafe { display_section_info(".text", process_handle, base_address as *const c_void) } {
+                        Ok(Some(section_info)) => println!("Section Info: {:?}", section_info),
+                        Ok(None) => println!("Section not found"),
+                        Err(e) => println!("Error: {}", e),
+                    }
                 }
                 Err(err) => {
                     eprintln!("Error: {}", err);
@@ -89,13 +89,11 @@ fn main() {
                 Err(e) => eprintln!("Error: {}", e),
             }
 
-            match process_info.is_secure_process()
-            {
+            match process_info.is_secure_process() {
                 Ok(is_secure) => println!("Is Secure Process: {}", is_secure),
                 Err(e) => eprintln!("Error: {}", e),
             }
-        },
-
+        }
         Err(e) => println!("Error: {}", e),
     }
 }

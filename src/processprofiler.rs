@@ -22,14 +22,14 @@ use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInfor
 macro_rules! check_process_handle {
     ($handle:expr) => {
         if $handle == 0 {
-            return Err(format!("No process. Error code: {}", unsafe { GetLastError() }));
+            println!("No process. Error code: {}", unsafe { GetLastError() });
         }
     };
 }
 
 
-const TokenAccessType: TOKEN_ACCESS_MASK = TOKEN_QUERY;
-const ThreadAccessType: THREAD_ACCESS_RIGHTS = THREAD_QUERY_INFORMATION;
+const TOKEN_ACCESS_TYPE: TOKEN_ACCESS_MASK = TOKEN_QUERY;
+const THREAD_ACCESS_TYPE: THREAD_ACCESS_RIGHTS = THREAD_QUERY_INFORMATION;
 
 impl PROCESS_EXTENDED_BASIC_INFORMATION
 {
@@ -406,7 +406,7 @@ impl ProcessInfo
         let token_opened: BOOL = unsafe {
             OpenProcessToken(
                 self.process_handle,
-                TokenAccessType,
+                TOKEN_ACCESS_TYPE,
                 &mut token_handle,
             )
         };
@@ -488,7 +488,7 @@ impl ProcessInfo
                     {
                         total_count += 1;
 
-                        let h_thread = OpenThread(ThreadAccessType, 0, thread_entry.th32ThreadID);
+                        let h_thread = OpenThread(THREAD_ACCESS_TYPE, 0, thread_entry.th32ThreadID);
 
                         if let Some(thread_handle) = CleanHandle::new(h_thread)
                         {
@@ -561,7 +561,7 @@ impl ProcessInfo
 
         let mut token_handle: HANDLE = INVALID_HANDLE_VALUE;
 
-        let res = unsafe { OpenProcessToken(self.process_handle, TokenAccessType, &mut token_handle) };
+        let res = unsafe { OpenProcessToken(self.process_handle, TOKEN_ACCESS_TYPE, &mut token_handle) };
         if res == 0 {
 
             return fail;
