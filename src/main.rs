@@ -1,5 +1,5 @@
 use std::ffi::{c_void, OsString};
-use peutils::display_section_info;
+use peutils::{display_section_info, IATResult};
 use windows_sys::Win32::Foundation::{HANDLE, MAX_PATH};
 use windows_sys::Win32::Security::SE_DEBUG_NAME;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
@@ -30,7 +30,7 @@ const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
 
 
 fn main() {
-    let pid: u32 = 12752; // unsafe { GetCurrentProcessId() };
+    let pid: u32 =  unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 
     let process_info = ProcessInfo::new(pid, process_handle);
@@ -58,10 +58,23 @@ fn main() {
                     println!("Base Address: {:?}", base_address);
                     println!("Size of Image: {}", size_of_image);
 
-                    match iterate_iat(process_handle, base_address) {
-                        Ok(()) => println!("IAT done."),
-                        Err(e) => println!("Error iterating IAT: {}", e),
+                    let search_name = "OpenProcess";
+
+                    match iterate_iat(process_handle, base_address, search_name) {
+                        Ok(IATResult::Found) => {
+                            println!("Function '{}' found in IAT.", search_name);
+                        },
+                        Ok(IATResult::NotFound) => {
+                            println!("Function '{}' not found in IAT.", search_name);
+                        },
+                        Ok(IATResult::FailedExecution) => {
+                            println!("Failed to execute IAT iteration: ");
+                        },
+                        Err(e) => {
+                            println!("Error iterating IAT: {}", e);
+                        },
                     }
+                    
 
                     match unsafe { display_section_info(".text", process_handle, base_address as *const c_void) } {
                         Ok(Some(section_info)) => println!("Section Info: {:?}", section_info),

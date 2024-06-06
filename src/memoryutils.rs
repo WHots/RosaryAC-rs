@@ -1,4 +1,4 @@
-use std::{ffi::{c_void, CStr}, mem, slice};
+use std::{ffi::{c_void, CStr}, io, mem, ptr, slice};
 use windows_sys::Win32::Foundation::{BOOL, HANDLE, GetLastError};
 use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory};
 
