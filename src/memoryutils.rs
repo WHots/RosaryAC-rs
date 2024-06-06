@@ -1,4 +1,4 @@
-use std::{ffi::{c_void, CStr}, io, mem, ptr, slice};
+use std::{ffi::{c_void, CStr}, io, mem::{self, MaybeUninit}, ptr, slice};
 use windows_sys::Win32::Foundation::{BOOL, HANDLE, GetLastError};
 use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory};
 
@@ -57,7 +57,7 @@ macro_rules! memmem {
 
 /// Enum for breakpoint opcodes.
 #[repr(u8)]
-enum BreakpointOpcode
+pub enum BreakpointOpcode
 {
     Int3 = 0xCC, // Int3
     Int1 = 0xF1, // ICE
@@ -76,28 +76,28 @@ enum BreakpointOpcode
 /// # Returns
 ///
 /// A `Result` containing the value read from memory if successful, or an error string otherwise.
-pub fn read_memory<T: Sized>(process_handle: HANDLE, address: *const u8) -> Result<T, String>
+pub fn read_memory<T: Sized>(process_handle: HANDLE, address: *const u8) -> Result<T, String> 
 {
 
-    let mut buffer: T = unsafe { mem::zeroed() };
+    let mut buffer = MaybeUninit::<T>::uninit();
     let mut bytes_read = 0;
 
     let success: BOOL = unsafe {
         ReadProcessMemory(
             process_handle,
             address as *const c_void,
-            &mut buffer as *mut _ as *mut c_void,
+            buffer.as_mut_ptr() as *mut c_void,
             mem::size_of::<T>(),
             &mut bytes_read,
         )
     };
 
-    if success == 0 || bytes_read != mem::size_of::<T>()
+    if success == 0 || bytes_read != mem::size_of::<T>() 
     {
-        return Err(format!("Failed to read memory at address {:?}. Error code: {}", address, unsafe { GetLastError() }));
+        return Err(format!("Failed to read memory at address {:?}. Error code: {}", address, unsafe { GetLastError() } ));
     }
 
-    Ok(buffer)
+    Ok(unsafe { buffer.assume_init() })
 }
 
 

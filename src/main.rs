@@ -30,18 +30,15 @@ const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
 
 
 fn main() {
-    let pid: u32 =  unsafe { GetCurrentProcessId() };
+    let pid: u32 = unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 
     let process_info = ProcessInfo::new(pid, process_handle);
 
-    let mut buffer = Vec::new();
-    let mut output = OsString::new();
-
     let violent_threads = process_info.query_thread_information();
     println!("Violent Threads: {:?}", violent_threads);
 
-    match process_info.get_process_image_path_ex(&mut buffer, &mut output) {
+    match process_info.get_process_image_path_ex() {
         Ok(path) => {
             println!("{:?}", path);
 
@@ -74,7 +71,6 @@ fn main() {
                             println!("Error iterating IAT: {}", e);
                         },
                     }
-                    
 
                     match unsafe { display_section_info(".text", process_handle, base_address as *const c_void) } {
                         Ok(Some(section_info)) => println!("Section Info: {:?}", section_info),

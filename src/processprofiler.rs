@@ -4,7 +4,7 @@ use std::{mem, ptr};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
 use windows_sys::Win32::Foundation::{BOOL, BOOLEAN, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID, NTSTATUS, STATUS_SUCCESS};
-use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
+use windows_sys::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
 use windows_sys::Win32::System::Threading::{GetProcessIdOfThread, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_ACCESS_RIGHTS, THREAD_QUERY_INFORMATION};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
@@ -109,51 +109,6 @@ impl ProcessInfo
     }
 
 
-    /// Retrieves a list of module handles for a given process.
-    ///
-    /// # Arguments
-    ///
-    /// * `h_process` - A handle to the process.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a vector of module handles if successful, or an error string otherwise.
-    pub fn get_process_modules(&self) -> Result<Vec<HMODULE>, String>
-    {
-
-        check_process_handle!(self.process_handle);
-
-        let mut modules: Vec<HMODULE> = Vec::with_capacity(1024);
-
-        unsafe {
-            modules.set_len(1024);
-        }
-
-        let mut cb_needed = 0;
-
-        let success = unsafe {
-            EnumProcessModules(
-                self.process_handle,
-                modules.as_mut_ptr(),
-                (modules.len() * std::mem::size_of::<HMODULE>()) as u32,
-                &mut cb_needed,
-            )
-        };
-
-        if success == 0 {
-            return Err(format!("Failed to enumerate process modules. Error code: {}", unsafe { GetLastError() }));
-        }
-
-        let module_count = cb_needed as usize / std::mem::size_of::<HMODULE>();
-
-        unsafe {
-            modules.set_len(module_count);
-        }
-
-        Ok(modules)
-    }
-
-
     /// Retrieves the file path of the main module of the process as an `OsStr`.
     ///
     /// This method fills a provided buffer with the file path and stores the result in an `OsString`.
@@ -171,14 +126,14 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<&'a OsStr, &'static str>` - A reference to the `OsStr` slice containing the file path of the main module, or an error if the operation fails.
-    pub fn get_process_image_path_ex<'a>(&self, buffer: &'a mut Vec<u16>, output: &'a mut OsString) -> Result<&'a OsStr, &'static str>
+    pub fn get_process_image_path_ex(&self) -> Result<OsString, &'static str> 
     {
 
         check_process_handle!(self.process_handle);
-
+    
         const MAX_PATH: usize = 260;
-        buffer.resize(MAX_PATH, 0);
-
+        let mut buffer = vec![0u16; MAX_PATH];
+    
         let result = unsafe {
             GetModuleFileNameExW(
                 self.process_handle,
@@ -187,19 +142,19 @@ impl ProcessInfo
                 buffer.len() as u32,
             )
         };
-
-        if result == 0
+    
+        if result == 0 
         {
             return Err("Failed to get qualified image name.");
         }
-
+    
         let len = buffer.iter().position(|&x| x == 0).unwrap_or(buffer.len());
         buffer.truncate(len);
-
-        *output = OsString::from_wide(&buffer);
-
-        Ok(output.as_os_str())
+    
+        let output = OsString::from_wide(&buffer);
+        Ok(output)
     }
+    
 
 
     // Checks if the process is being debugged by querying the debug port.
