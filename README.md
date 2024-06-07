@@ -1,6 +1,7 @@
 # RosaryAC - Proof of Concept Anti-Cheat Client (Work in Progress)
 
-![OIG4 j9lzqjcxld0](https://github.com/WHots/RosaryAC-rs/assets/56490828/e6c34148-1905-42b2-94d8-5961fea42fc0)
+![rosaryanticheatantimalwarereaper1](https://github.com/WHots/RosaryAC-rs/assets/56490828/84f0322c-754b-45aa-8f8a-57eaa13cba4c)
+
 
 ## About The Project
 
