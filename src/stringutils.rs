@@ -1,6 +1,6 @@
 use std::ffi::CString;
 use windows_sys::Win32::Foundation::HANDLE;
-use crate::memoryutils;
+use crate::memoryutils::memory_tools::read_memory;
 
 
 
@@ -36,7 +36,7 @@ pub fn read_c_string(process_handle: HANDLE, address: *const u8) -> Result<Strin
 
     loop {
 
-        let byte: u8 = match memoryutils::read_memory(process_handle, unsafe { address.add(offset) }) {
+        let byte: u8 = match read_memory(process_handle, unsafe { address.add(offset) }) {
             Ok(b) => b,
             Err(e) => return Err(e),
         };

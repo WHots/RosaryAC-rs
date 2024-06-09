@@ -8,7 +8,9 @@ use windows_sys::Win32::System::Diagnostics::Debug::{IMAGE_NT_HEADERS64, IMAGE_S
 use windows_sys::Win32::System::WindowsProgramming::IMAGE_THUNK_DATA64;
 use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQueryEx};
 use windows_sys::Win32::System::SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_IMPORT_DESCRIPTOR, IMAGE_NT_SIGNATURE};
-use crate::memoryutils;
+
+use crate::memoryutils::memory_tools;
+use crate::memoryutils::memory_tools::read_memory;
 use crate::stringutils::{read_c_string, strings_match};
 
 
@@ -90,7 +92,7 @@ impl fmt::Display for PEError
 fn get_nt_headers(process_handle: HANDLE, base: *const u8) -> Result<IMAGE_NT_HEADERS64, PEError> 
 {
 
-    let dos_header: IMAGE_DOS_HEADER = memoryutils::read_memory(process_handle, base).map_err(|_| PEError::ReadMemoryFailed)?;
+    let dos_header: IMAGE_DOS_HEADER = read_memory(process_handle, base).map_err(|_| PEError::ReadMemoryFailed)?;
 
     if dos_header.e_magic != IMAGE_DOS_SIGNATURE 
     {
@@ -98,7 +100,7 @@ fn get_nt_headers(process_handle: HANDLE, base: *const u8) -> Result<IMAGE_NT_HE
     }
 
     let nt_headers_address = unsafe { base.add(dos_header.e_lfanew as usize) };
-    let nt_headers: IMAGE_NT_HEADERS64 = memoryutils::read_memory(process_handle, nt_headers_address).map_err(|_| PEError::ReadMemoryFailed)?;
+    let nt_headers: IMAGE_NT_HEADERS64 = read_memory(process_handle, nt_headers_address).map_err(|_| PEError::ReadMemoryFailed)?;
 
     if nt_headers.Signature != IMAGE_NT_SIGNATURE 
     {
@@ -139,7 +141,7 @@ fn get_import_descriptors(process_handle: HANDLE, nt_headers: &IMAGE_NT_HEADERS6
 
         for i in 0..num_descriptors 
         {
-            let descriptor: IMAGE_IMPORT_DESCRIPTOR = memoryutils::read_memory(
+            let descriptor: IMAGE_IMPORT_DESCRIPTOR = read_memory(
                 process_handle,
                 import_descriptor_address.add(i as usize * mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>()) as *const u8,
             )
@@ -195,7 +197,7 @@ pub fn iterate_iat(process_handle: HANDLE, base: *const u8, search_name: &str) -
 
         loop {
 
-            let original_thunk_data: IMAGE_THUNK_DATA64 = memoryutils::read_memory(
+            let original_thunk_data: IMAGE_THUNK_DATA64 = read_memory(
                 process_handle,
                 unsafe { original_thunk_address.add(i * std::mem::size_of::<IMAGE_THUNK_DATA64>()) } as *const u8,
             )
@@ -254,7 +256,7 @@ pub unsafe fn display_section_info(section_name: &str, process_handle: HANDLE, b
 
         for i in 0..headers.FileHeader.NumberOfSections 
         {
-            let section = memoryutils::read_memory::<IMAGE_SECTION_HEADER>(process_handle, section_headers.add(i as usize) as *const u8).map_err(|_| PEError::ReadMemoryFailed)?;
+            let section = read_memory::<IMAGE_SECTION_HEADER>(process_handle, section_headers.add(i as usize) as *const u8).map_err(|_| PEError::ReadMemoryFailed)?;
 
             let name_bytes = slice::from_raw_parts(section.Name.as_ptr(), 8);
             let name_end = name_bytes.iter().position(|&c| c == 0).unwrap_or(8);
