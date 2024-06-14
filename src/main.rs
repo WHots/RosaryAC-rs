@@ -24,6 +24,7 @@ const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
 
 
 
+
 //  Testing stuff in here, so it will probably be very random.
 
 
@@ -38,7 +39,9 @@ fn main() {
     let violent_threads = process_info.query_thread_information();
     println!("Violent Threads: {:?}", violent_threads);
 
-    match process_info.get_process_image_path_ex() {
+    match process_info.get_process_image_path_ex() 
+    {
+
         Ok(path) => {
             println!("{:?}", path);
 

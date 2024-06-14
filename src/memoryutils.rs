@@ -13,6 +13,8 @@ use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 
 pub mod memory_tools 
 {
+    use windows_sys::Win32::System::Memory::{VirtualQueryEx, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READWRITE, MEM_MAPPED};
+
     use super::*;
 
     /// Calculates the Relative Virtual Address (RVA).
@@ -144,6 +146,76 @@ pub mod memory_tools
     }
 
 
+    /// Scans a chunk of memory in a target process for a specific pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `process_handle` - A handle to the process to read memory from.
+    /// * `start_address` - The starting address in the target process to begin scanning.
+    /// * `chunk_size` - The size of the memory chunk to scan.
+    /// * `pattern` - The pattern to search for within the memory chunk.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing `true` if the pattern is found, or `false` if not.
+    /// Returns `Err(())` if there is a failure reading the memory.
+    pub fn scan_memory(process_handle: HANDLE, start_address: *const u8, chunk_size: usize, pattern: &[u8], ) -> Result<bool, ()> 
+    {
+        for offset in (0..chunk_size).step_by(4096) 
+        {
+            let current_address = unsafe { start_address.add(offset) };
+
+            match read_memory::<[u8; 4096]>(process_handle, current_address) 
+            {
+                Ok(chunk) => 
+                {
+                    let result = memmem!(chunk.as_ptr(), chunk.len(), pattern.as_ptr(), pattern.len());
+
+                    if result.is_some() 
+                    {
+                        return Ok(true);
+                    }
+                }
+                Err(_) => return Err(()),
+            }
+        }
+
+        Ok(false)
+    }
+
+
+    /// Checks for mapped executable regions in a target process.
+    ///
+    /// # Arguments
+    ///
+    /// * `process_handle` - A handle to the process to check.
+    ///
+    /// # Returns
+    ///
+    /// `true` if a mapped executable region is found, `false` otherwise.
+    pub fn is_memory_mapped_exe(process_handle: HANDLE) -> bool 
+    {
+
+        let mut address = 0;
+        let mut mem_info = MaybeUninit::<MEMORY_BASIC_INFORMATION>::uninit();
+        let mem_info_size = mem::size_of::<MEMORY_BASIC_INFORMATION>();
+
+        while unsafe { VirtualQueryEx(process_handle, address as *const c_void, mem_info.as_mut_ptr(), mem_info_size) } != 0 
+        {
+            let mem_info = unsafe { mem_info.assume_init() };
+
+            if mem_info.Type == MEM_MAPPED && mem_info.Protect == PAGE_EXECUTE_READWRITE 
+            {
+                return true;
+            }
+
+            address += mem_info.RegionSize;
+        }
+
+        false
+    }
+
+
     /// Checks if an address is canonical on x64 systems.
     ///
     /// # Arguments
@@ -154,7 +226,7 @@ pub mod memory_tools
     ///
     /// `true` if the address is canonical, otherwise `false`.
     #[inline]
-    pub fn is_canonical(address: u64) -> bool 
+    fn is_canonical(address: u64) -> bool 
     {
         let upper_bits = address >> 47;
         upper_bits == 0 || upper_bits == (1 << 17) - 1

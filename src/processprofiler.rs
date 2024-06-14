@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{c_void, OsStr, OsString};
+use std::path::Path;
 use std::{mem, ptr};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
@@ -73,6 +74,53 @@ impl ProcessInfo
     }
 
 
+    
+
+    /// Checks if a specific process module exists.
+    ///
+    /// # Arguments
+    ///
+    /// * `module_name` - The name of the module to look for as an `OsStr`.
+    ///
+    /// # Returns
+    ///
+    /// * `bool` - `true` if the module exists, otherwise `false`.
+    pub fn module_exists(&self, module_name: &OsStr) -> bool 
+    {
+        check_process_handle!(self.process_handle);
+
+        const MAX_MODULES: usize = 1024;
+        let mut h_modules: Vec<HMODULE> = vec![0; MAX_MODULES];
+        let mut cb_needed: u32 = 0;
+
+        if unsafe { EnumProcessModulesEx(self.process_handle, h_modules.as_mut_ptr(), (MAX_MODULES * std::mem::size_of::<HMODULE>()) as u32, &mut cb_needed, LIST_MODULES_ALL,) } == 0 
+        {
+            return false;
+        }
+
+        let module_count = cb_needed as usize / std::mem::size_of::<HMODULE>();
+        let mut buffer = vec![0u16; 260];
+
+        //  Idiomatic because im an idiot.
+        (0..module_count).any(|i| 
+        {
+            let result = unsafe { GetModuleFileNameExW( self.process_handle, h_modules[i], buffer.as_mut_ptr(), buffer.len() as u32,) };
+
+            if result == 0 
+            {
+                return false;
+            }
+
+            let len = buffer.iter().position(|&x| x == 0).unwrap_or(buffer.len());
+            let module_path = OsString::from_wide(&buffer[..len]);
+            let module_name_in_path = Path::new(&module_path).file_name().unwrap_or(OsStr::new(""));
+
+            module_name_in_path == module_name
+        })
+    }
+
+
+
     /// Retrieves the handle and size of the main module of the process.
     ///
     /// # Errors
@@ -82,7 +130,8 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<(HMODULE, usize), String>` - The handle and size of the main module or an error.
-    pub fn get_main_module_ex(&self) -> Result<(*const u8, usize), String> {
+    pub fn get_main_module_ex(&self) -> Result<(*const u8, usize), String> 
+    {
 
         check_process_handle!(self.process_handle);
 
