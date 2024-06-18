@@ -87,6 +87,7 @@ impl ProcessInfo
     /// * `bool` - `true` if the module exists, otherwise `false`.
     pub fn module_exists(&self, module_name: &OsStr) -> bool 
     {
+        
         check_process_handle!(self.process_handle);
 
         const MAX_MODULES: usize = 1024;

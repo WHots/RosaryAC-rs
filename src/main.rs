@@ -1,9 +1,9 @@
 use std::ffi::{c_void, OsString};
 use peutils::{display_section_info, IATResult};
-use windows_sys::Win32::Foundation::{HANDLE, MAX_PATH};
+use windows_sys::Win32::Foundation::{CloseHandle, BOOL, HANDLE, MAX_PATH, NO_ERROR};
 use windows_sys::Win32::Security::SE_DEBUG_NAME;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
-
+use windows_sys::Win32::System::Services::{OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_MANAGER_ENUMERATE_SERVICE, SERVICE_QUERY_STATUS, SERVICE_STATUS};
 mod processprofiler;
 mod memoryutils;
 mod fileutils;
@@ -12,6 +12,7 @@ mod ntpsapi_h;
 mod memorymanage;
 mod winnt_h;
 mod stringutils;
+mod playerone;
 
 use crate::processprofiler::ProcessInfo;
 use crate::fileutils::get_file_internal_name;
@@ -30,7 +31,17 @@ const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
 
 
 
-fn main() {
+
+
+
+
+
+
+
+
+fn main()
+{
+
     let pid: u32 = unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 

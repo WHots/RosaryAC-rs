@@ -110,3 +110,23 @@ pub fn strings_match(s1: &str, s2: &str) -> bool
 
     max_common_length >= threshold
 }
+
+
+/// Converts a string slice to a null-terminated UTF-16 vector.
+///
+/// This function takes a string slice, encodes it in UTF-16, and appends a null
+/// terminator to the end of the encoded string. This is typically required when
+/// interfacing with Windows API functions that expect a wide string pointer.
+///
+/// # Arguments
+///
+/// * `s` - A string slice to be converted.
+///
+/// # Returns
+///
+/// A `Vec<u16>` that contains the UTF-16 encoded form of the input string, followed
+/// by a null terminator (0).
+pub fn to_wide_chars(s: &str) -> Vec<u16>
+{
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
