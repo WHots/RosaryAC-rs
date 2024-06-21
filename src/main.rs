@@ -13,12 +13,14 @@ mod memorymanage;
 mod winnt_h;
 mod stringutils;
 mod playerone;
+mod processfilters;
 
 use crate::processprofiler::ProcessInfo;
 use crate::fileutils::get_file_internal_name;
 use crate::fileutils::get_file_entropy;
 
 use crate::peutils::{iterate_iat};
+use crate::processfilters::process_enum;
 
 
 const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
@@ -42,6 +44,13 @@ const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
 fn main()
 {
 
+    let mut enumerator = process_enum::ProcessEnumerator::new();
+    enumerator.enumerate_processes();
+    let process_ids = enumerator.get_matching_pids();
+    for pid in process_ids {
+        println!("Process ID: {}", pid);
+    }
+
     let pid: u32 = unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 
@@ -58,7 +67,7 @@ fn main()
 
             match get_file_internal_name(&path) {
                 Ok(internal_name) => println!("Internal Name: {:?}", internal_name),
-                Err(e) => eprintln!("Error: {}", e),
+                Err(e) => eprintln!("Error: {:?}", e),
             }
             match get_file_entropy(&path) {
                 Ok(entropy) => println!("The entropy of the file is: {}", entropy),

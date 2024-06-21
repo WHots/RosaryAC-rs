@@ -78,6 +78,23 @@ pub mod memory_tools
 
 
 
+    /// Checks if an address is canonical on x64 systems.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` - The address to check.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the address is canonical, otherwise `false`.
+    #[inline]
+    fn is_canonical(address: u64) -> bool
+    {
+        let upper_bits = address >> 47;
+        upper_bits == 0 || upper_bits == (1 << 17) - 1
+    }
+
+
     /// Reads memory from a target process.
     ///
     /// # Arguments
@@ -213,22 +230,5 @@ pub mod memory_tools
         }
 
         false
-    }
-
-
-    /// Checks if an address is canonical on x64 systems.
-    ///
-    /// # Arguments
-    ///
-    /// * `address` - The address to check.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the address is canonical, otherwise `false`.
-    #[inline]
-    fn is_canonical(address: u64) -> bool 
-    {
-        let upper_bits = address >> 47;
-        upper_bits == 0 || upper_bits == (1 << 17) - 1
     }
 }
