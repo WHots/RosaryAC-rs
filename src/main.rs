@@ -4,7 +4,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, BOOL, HANDLE, MAX_PATH, NO_ERR
 use windows_sys::Win32::Security::SE_DEBUG_NAME;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 use windows_sys::Win32::System::Services::{OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_MANAGER_ENUMERATE_SERVICE, SERVICE_QUERY_STATUS, SERVICE_STATUS};
-mod processprofiler;
+mod processutils;
 mod memoryutils;
 mod fileutils;
 mod peutils;
@@ -15,12 +15,13 @@ mod stringutils;
 mod playerone;
 mod processfilters;
 
-use crate::processprofiler::ProcessInfo;
+use crate::processutils::ProcessInfo;
 use crate::fileutils::get_file_internal_name;
 use crate::fileutils::get_file_entropy;
 
 use crate::peutils::{iterate_iat};
-use crate::processfilters::process_enum;
+use crate::processfilters::ProcessEnumerator;
+//use crate::processfilters::process_enum;
 
 
 const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
@@ -43,13 +44,21 @@ const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
 
 fn main()
 {
-
+    /*
     let mut enumerator = process_enum::ProcessEnumerator::new();
     enumerator.enumerate_processes();
     let process_ids = enumerator.get_matching_pids();
     for pid in process_ids {
         println!("Process ID: {}", pid);
     }
+    */
+
+    let mut enumerator = ProcessEnumerator::new();
+    enumerator.enumerate_processes();
+
+    enumerator.process_matching_pids(|pid| {
+        println!("Processing PID: {}", pid);
+    });
 
     let pid: u32 = unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };

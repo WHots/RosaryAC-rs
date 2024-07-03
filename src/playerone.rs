@@ -5,6 +5,8 @@
 // It is essentially used to see if the host machine has a typical setup for a machine that is used to cheat in games,
 // such as having anti-virus turned off, secure boot disabled, Hyper-V enabled, etc.
 
+
+
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::{
