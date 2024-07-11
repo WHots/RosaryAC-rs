@@ -1,4 +1,12 @@
-use std::collections::HashMap;
+// src/processutils.rs
+
+// This module contains process utility function based around process interactions.
+
+
+
+
+
+use std::collections::{HashMap};
 use std::ffi::{c_void, OsStr, OsString};
 use std::path::Path;
 use std::{mem, ptr};
@@ -15,6 +23,7 @@ use windows_sys::Win32::System::SystemServices::PRIVILEGE_SET_ALL_NECESSARY;
 
 use crate::memorymanage::CleanHandle;
 use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInformationThread, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
+
 
 
 
@@ -464,8 +473,6 @@ impl ProcessInfo
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
     pub fn query_thread_information(&self) -> HashMap<String, usize>
     {
-
-        //  ...
 
         let mut counts = HashMap::new();
 

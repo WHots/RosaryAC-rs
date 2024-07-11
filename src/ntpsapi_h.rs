@@ -1,16 +1,19 @@
-use std::ffi::c_void;
+// src/ntpsapi_h.rs
+
+// This module contains custom type defs from ntpsapi.
+
+
+
+
+
+use std::ffi::{c_void};
+use std::os::raw::{c_ulong, c_uint};
 use windows_sys::Win32::Foundation::{BOOLEAN, HANDLE, NTSTATUS};
 use windows_sys::Win32::Security::PRIVILEGE_SET;
 use windows_sys::Win32::System::Threading::PROCESS_BASIC_INFORMATION;
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
-
-
-
-
-
-
-
-
+use crate::ntexapi_h::SystemInformationClass;
+use crate::ntobapi_h::OBJECT_INFORMATION_CLASS;
 
 
 #[repr(C)]
@@ -129,6 +132,22 @@ extern "system" {
         ReturnLength: *mut u32,
     ) -> NTSTATUS;
 
+
+    pub fn NtQuerySystemInformation(
+        SystemInformationClass: SystemInformationClass,
+        SystemInformation: *mut c_void,
+        SystemInformationLength: c_uint,
+        ReturnLength: *mut c_ulong,
+    ) -> NTSTATUS;
+
+
+    pub fn NtQueryObject(
+        Handle: HANDLE,
+        ObjectInformationClass: OBJECT_INFORMATION_CLASS,
+        ObjectInformation: *mut c_void,
+        ObjectInformationLength: u32,
+        ReturnLength: *mut u32,
+    ) -> NTSTATUS;
 
     pub fn NtPrivilegeCheck(
         ClientToken: HANDLE,

@@ -1,11 +1,6 @@
+// src/winnt_h.rs
 
-
-
-
-
-
-
-
+// This module contains custom type defs from winnt.
 
 
 

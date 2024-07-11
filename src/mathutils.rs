@@ -1,4 +1,6 @@
+// src/mathutils.rs
 
+// This module contains utility functions based around math operations.
 
 
 

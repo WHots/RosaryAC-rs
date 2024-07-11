@@ -7,6 +7,8 @@
 
 
 
+
+
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::{
@@ -34,7 +36,7 @@ pub mod player_one
     use super::*;
 
     /// Defender real-time protection services.
-    const DEF_SERV: [&str; 2] = ["WdNisDrv", "WdNisSvc"];
+    pub const DEF_SERV: [&str; 2] = ["WdNisDrv", "WdNisSvc"];
 
 
 

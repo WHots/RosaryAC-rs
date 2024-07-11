@@ -1,3 +1,11 @@
+// src/peutils.rs
+
+// This module contains utility functions based around interaction with a Process Environment.
+
+
+
+
+
 use std::mem;
 use std::ptr::null;
 use std::slice;

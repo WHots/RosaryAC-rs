@@ -1,8 +1,17 @@
-//! Module for enumerating processes with the same owner SID as the current process.
+// src/processfilters.rs
 
+// This module contains process filter logic.
+
+
+
+
+
+use std::collections::HashSet;
+use std::ffi::c_void;
 use std::fmt::Debug;
 use std::mem::size_of;
 use std::ptr::null_mut;
+use std::slice;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree, PSID};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
 use windows_sys::Win32::System::Threading::{OpenProcess, GetCurrentProcessId, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, GetCurrentProcess, PROCESS_QUERY_LIMITED_INFORMATION};
@@ -11,6 +20,8 @@ use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
 
 use crate::memorymanage::CleanHandle;
+use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION, SYSTEM_HANDLE_INFORMATION_EX, SystemInformationClass};
+use crate::ntpsapi_h::NtQuerySystemInformation;
 
 const TOKEN_ACCESS_TYPE: TOKEN_ACCESS_MASK = TOKEN_QUERY;
 const PROCESS_ACCESS: u32 = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ;
@@ -187,6 +198,67 @@ impl ProcessEnumerator
         }
 
         Ok(())
+    }
+
+
+    /// Queries all the handles a certain process ID has open.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<HashMap<String, usize>, String>` - A HashMap containing handle types and their counts, or an error message.
+    pub fn check_process_handles(&self) -> Result<Vec<u32>, String>
+    {
+
+        let current_process_id = self.current_process_id;
+        let mut processes_with_handle = HashSet::new();
+        let mut buffer_size = 0x10000;
+        let mut buffer = Vec::with_capacity(buffer_size);
+
+        loop {
+            let mut return_length = 0;
+            let status = unsafe {
+                NtQuerySystemInformation(
+                    SystemInformationClass::SystemHandleInformation,
+                    buffer.as_mut_ptr() as *mut c_void,
+                    buffer_size as u32,
+                    &mut return_length,
+                )
+            };
+
+            if status == 0
+            {
+
+                let handle_info = unsafe { &*(buffer.as_ptr() as *const SYSTEM_HANDLE_INFORMATION_EX) };
+                let handle_count = handle_info.NumberOfHandles as usize;
+
+                let handles = unsafe {
+                    slice::from_raw_parts(
+                        &handle_info.Handles as *const SYSTEM_HANDLE_INFORMATION,
+                        handle_count,
+                    )
+                };
+
+                for handle in handles {
+                    if handle.Object == current_process_id as *mut c_void {
+                        processes_with_handle.insert(handle.ProcessId);
+                    }
+                }
+
+                break;
+            }
+            else if status == 0xC0000004u32 as i32
+            {
+                // STATUS_INFO_LENGTH_MISMATCH
+                buffer_size *= 2;
+                buffer = Vec::with_capacity(buffer_size);
+            }
+            else
+            {
+                return Err(format!("NtQuerySystemInformation failed with status: {:#x}", status));
+            }
+        }
+
+        Ok(processes_with_handle.into_iter().collect())
     }
 
 

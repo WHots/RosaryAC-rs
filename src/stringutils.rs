@@ -1,10 +1,13 @@
+// src/stringutils.rs
+
+// A mod which contain utility functions for string based operations.
+
+
+
+
 use std::ffi::CString;
 use windows_sys::Win32::Foundation::HANDLE;
 use crate::memoryutils::memory_tools::read_memory;
-
-
-
-
 
 
 
