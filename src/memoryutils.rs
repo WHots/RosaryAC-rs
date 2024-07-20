@@ -1,16 +1,16 @@
-// src/memoryutils.rs
+//! src/memoryutils.rs
 
 // This module contains memory utility functions based around process memory operations.
 
 
 
 
+
 use std::{ffi::{c_void}, mem::{self, MaybeUninit}};
-use core::slice;
 use windows_sys::Win32::Foundation::{BOOL, HANDLE, GetLastError};
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 
-
+use std::slice;
 
 
 

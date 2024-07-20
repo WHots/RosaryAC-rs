@@ -1,4 +1,4 @@
-// src/stringutils.rs
+//! src/stringutils.rs
 
 // A mod which contain utility functions for string based operations.
 

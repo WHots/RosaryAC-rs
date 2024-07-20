@@ -1,4 +1,4 @@
-// src/ntexapi_h.rs
+//! src/ntexapi_h.rs
 
 // This module contains custom type defs from ntexapi.
 
@@ -6,7 +6,9 @@
 
 
 
-use std::ffi::c_void;
+use std::ffi::{c_void};
+use std::os::raw::{c_ulong, c_ushort};
+
 
 #[repr(u32)]
 pub enum SystemInformationClass
@@ -263,8 +265,36 @@ pub enum SystemInformationClass
 }
 
 
+
 #[repr(C)]
-pub struct SYSTEM_HANDLE_INFORMATION
+pub struct SYSTEM_HANDLE_TABLE_ENTRY_INFO
+{
+    pub(crate) process_id: u16,
+    creator_back_trace_index: u16,
+    pub(crate) object_type_index: u8,
+    handle_attributes: u8,
+    handle_value: u16,
+    object: *mut c_void,
+    granted_access: u32,
+}
+
+
+#[repr(C)]
+pub struct SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX
+{
+    pub(crate) Object: *mut c_void,
+    pub(crate) UniqueProcessId: usize,
+    HandleValue: usize,
+    GrantedAccess: c_ulong,
+    CreatorBackTraceIndex: c_ushort,
+    ObjectTypeIndex: c_ushort,
+    HandleAttributes: c_ulong,
+    Reserved: c_ulong,
+}
+
+
+#[repr(C)]
+pub(crate) struct SYSTEM_HANDLE_INFORMATION
 {
     pub(crate) ProcessId: u32,
     ObjectTypeNumber: u8,
@@ -272,8 +302,18 @@ pub struct SYSTEM_HANDLE_INFORMATION
     Handle: u16,
     pub(crate) Object: *mut c_void,
     GrantedAccess: u32,
+    pub(crate) handle_count: usize,
+    pub(crate) handles: [SYSTEM_HANDLE_TABLE_ENTRY_INFO; 1],
 }
 
+
+/*
+#[repr(C)]
+pub(crate) struct SYSTEM_HANDLE_INFORMATION {
+    pub(crate) handle_count: usize,
+    pub(crate) handles: [SYSTEM_HANDLE_TABLE_ENTRY_INFO; 1],
+}
+*/
 
 #[repr(C)]
 pub struct SYSTEM_HANDLE_INFORMATION_EX

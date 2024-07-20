@@ -1,4 +1,4 @@
-// src/processfilters.rs
+//! src/processfilters.rs
 
 // This module contains process filter logic.
 
@@ -11,8 +11,8 @@ use std::ffi::c_void;
 use std::fmt::Debug;
 use std::mem::size_of;
 use std::ptr::null_mut;
-use std::slice;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree, PSID};
+use std::{mem, slice};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree, PSID, STATUS_INFO_LENGTH_MISMATCH};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
 use windows_sys::Win32::System::Threading::{OpenProcess, GetCurrentProcessId, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, GetCurrentProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER, TOKEN_QUERY, EqualSid, TOKEN_ACCESS_MASK};
@@ -20,7 +20,8 @@ use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
 
 use crate::memorymanage::CleanHandle;
-use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION, SYSTEM_HANDLE_INFORMATION_EX, SystemInformationClass};
+use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION, SYSTEM_HANDLE_INFORMATION_EX, SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX, SystemInformationClass};
+use crate::ntexapi_h::SystemInformationClass::{SystemExtendedHandleInformation, SystemHandleInformation};
 use crate::ntpsapi_h::NtQuerySystemInformation;
 
 const TOKEN_ACCESS_TYPE: TOKEN_ACCESS_MASK = TOKEN_QUERY;
@@ -173,7 +174,7 @@ impl ProcessEnumerator
             if process_entry.th32ProcessID != self.current_process_id
             {
                 let process_handle = CleanHandle::new(unsafe {
-                    OpenProcess(PROCESS_ACCESS, 0, process_entry.th32ProcessID)
+                    OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_entry.th32ProcessID)
                 });
 
                 if let Some(process_handle) = process_handle
@@ -201,65 +202,61 @@ impl ProcessEnumerator
     }
 
 
-    /// Queries all the handles a certain process ID has open.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<HashMap<String, usize>, String>` - A HashMap containing handle types and their counts, or an error message.
     pub fn check_process_handles(&self) -> Result<Vec<u32>, String>
     {
 
-        let current_process_id = self.current_process_id;
         let mut processes_with_handle = HashSet::new();
         let mut buffer_size = 0x10000;
-        let mut buffer = Vec::with_capacity(buffer_size);
+        let mut buffer: Vec<u8> = Vec::with_capacity(buffer_size);
 
         loop {
+
+            buffer.clear();
+            buffer.resize(buffer_size, 0);
             let mut return_length = 0;
-            let status = unsafe {
-                NtQuerySystemInformation(
-                    SystemInformationClass::SystemHandleInformation,
-                    buffer.as_mut_ptr() as *mut c_void,
-                    buffer_size as u32,
-                    &mut return_length,
-                )
-            };
+
+            let status = unsafe { NtQuerySystemInformation(SystemExtendedHandleInformation, buffer.as_mut_ptr() as *mut _, buffer_size as u32, &mut return_length,) };
 
             if status == 0
             {
+                let handle_info_header = buffer.as_ptr() as *const SYSTEM_HANDLE_INFORMATION_EX;
+                let handle_count = unsafe { (*handle_info_header).NumberOfHandles as usize };
+                let handle_entry_size = mem::size_of::<SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX>();
 
-                let handle_info = unsafe { &*(buffer.as_ptr() as *const SYSTEM_HANDLE_INFORMATION_EX) };
-                let handle_count = handle_info.NumberOfHandles as usize;
+                for i in 0..handle_count
+                {
+                    let offset = mem::size_of::<SYSTEM_HANDLE_INFORMATION_EX>() + i * handle_entry_size;
 
-                let handles = unsafe {
-                    slice::from_raw_parts(
-                        &handle_info.Handles as *const SYSTEM_HANDLE_INFORMATION,
-                        handle_count,
-                    )
-                };
+                    if offset + handle_entry_size > buffer.len() {
+                        return Err("Buffer overflow".to_string());
+                    }
 
-                for handle in handles {
-                    if handle.Object == current_process_id as *mut c_void {
-                        processes_with_handle.insert(handle.ProcessId);
+                    let handle_info = unsafe {
+                        &*(buffer[offset..].as_ptr() as *const SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX)
+                    };
+
+                    if handle_info.UniqueProcessId as u32 == self.current_process_id {
+                        processes_with_handle.insert(handle_info.UniqueProcessId as u32);
                     }
                 }
-
                 break;
             }
-            else if status == 0xC0000004u32 as i32
+            else if status == STATUS_INFO_LENGTH_MISMATCH
             {
-                // STATUS_INFO_LENGTH_MISMATCH
                 buffer_size *= 2;
-                buffer = Vec::with_capacity(buffer_size);
-            }
-            else
-            {
+
+                if buffer_size > 1024 * 1024 * 1024 {
+                    return Err("Buffer size exceeded reasonable limits".to_string());
+                }
+
+            } else {
                 return Err(format!("NtQuerySystemInformation failed with status: {:#x}", status));
             }
         }
 
         Ok(processes_with_handle.into_iter().collect())
     }
+
 
 
     /// Process the list of matching process IDs with a generic function.

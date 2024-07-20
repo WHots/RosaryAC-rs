@@ -1,4 +1,4 @@
-// src/processutils.rs
+//! src/processutils.rs
 
 // This module contains process utility function based around process interactions.
 
@@ -12,9 +12,9 @@ use std::path::Path;
 use std::{mem, ptr};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStringExt;
-use windows_sys::Win32::Foundation::{BOOL, BOOLEAN, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID, NTSTATUS, STATUS_SUCCESS};
+use windows_sys::Win32::Foundation::{BOOL, BOOLEAN, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID, NTSTATUS, STATUS_INFO_LENGTH_MISMATCH, STATUS_SUCCESS};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
-use windows_sys::Win32::System::Threading::{GetProcessIdOfThread, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_ACCESS_RIGHTS, THREAD_QUERY_INFORMATION};
+use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetProcessIdOfThread, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_ACCESS_RIGHTS, THREAD_QUERY_INFORMATION};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 
@@ -22,11 +22,9 @@ use windows_sys::Win32::Security::{GetTokenInformation, LookupPrivilegeValueW, L
 use windows_sys::Win32::System::SystemServices::PRIVILEGE_SET_ALL_NECESSARY;
 
 use crate::memorymanage::CleanHandle;
-use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInformationThread, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
-
-
-
-
+use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION, SYSTEM_HANDLE_TABLE_ENTRY_INFO, SystemInformationClass};
+use crate::ntexapi_h::SystemInformationClass::SystemHandleInformation;
+use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInformationThread, NtQuerySystemInformation, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
 
 
 macro_rules! check_process_handle {
@@ -52,7 +50,6 @@ impl PROCESS_EXTENDED_BASIC_INFORMATION
         unsafe { std::mem::zeroed() }
     }
 }
-
 
 
 
@@ -534,6 +531,73 @@ impl ProcessInfo
     }
 
 
+    /// Retrieves the count of handles for a specific process and object type.
+    ///
+    /// This method queries the system for handle information and counts the number of handles
+    /// that match the given process ID and object type.
+    ///
+    /// # Arguments
+    ///
+    /// * `pid` - The process ID for which to count handles.
+    /// * `object_type` - The type of object to count handles for.
+    ///
+    /// # Returns
+    ///
+    /// Returns the count of handles matching the specified criteria, or -1 if an error occurred.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it uses raw pointers and calls the Windows API function
+    /// `NtQuerySystemInformation`, which is not guaranteed to be safe.
+    pub fn get_current_handle_count(&self, pid: u32, object_type: u8) -> Result<i32, NTSTATUS>
+    {
+
+        unsafe {
+
+            let mut buffer_size = 0;
+            let mut buffer: Vec<u8>;
+            let mut status: NTSTATUS;
+
+            status = NtQuerySystemInformation(SystemInformationClass::SystemHandleInformation, std::ptr::null_mut(), 0, &mut buffer_size);
+
+            if status != STATUS_INFO_LENGTH_MISMATCH {
+                return Err(status);
+            }
+
+            loop {
+                buffer = vec![0; buffer_size as usize];
+                status = NtQuerySystemInformation(SystemInformationClass::SystemHandleInformation, buffer.as_mut_ptr() as *mut _, buffer.len() as u32, &mut buffer_size);
+
+                if status != STATUS_INFO_LENGTH_MISMATCH {
+                    break;
+                }
+            }
+
+            let handle_count = usize::from_ne_bytes(buffer[0..8].try_into().unwrap());
+
+            let handles_offset = 8;
+            let handle_size = 24;
+            let mut count = 0;
+
+            for i in 0..handle_count
+            {
+                let base = handles_offset + i * handle_size;
+                let handle_pid = u16::from_ne_bytes(buffer[base..base+2].try_into().unwrap()) as u32;
+                let handle_type = buffer[base + 4];
+
+                if handle_pid == pid && handle_type == object_type
+                {
+                    count += 1;
+                }
+            }
+
+            Ok(count)
+        }
+    }
+
+
+
+
     //// Checks if the current process has a specified privilege enabled.
     ///
     /// # Arguments
@@ -574,8 +638,8 @@ impl ProcessInfo
         let mut token_handle: HANDLE = INVALID_HANDLE_VALUE;
 
         let res = unsafe { OpenProcessToken(self.process_handle, TOKEN_ACCESS_TYPE, &mut token_handle) };
-        if res == 0 {
 
+        if res == 0 {
             return fail;
         }
 
@@ -588,10 +652,12 @@ impl ProcessInfo
 
         status = unsafe { NtPrivilegeCheck(safe_handle.as_raw(), &mut required_privileges, &mut has_privilege) };
 
-        if status == STATUS_SUCCESS && has_privilege != 0 {
+        if status == STATUS_SUCCESS && has_privilege != 0
+        {
             1
         }
-        else {
+        else
+        {
             fail
         }
     }

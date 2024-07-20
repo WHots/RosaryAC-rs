@@ -1,4 +1,4 @@
-// src/peutils.rs
+//! src/peutils.rs
 
 // This module contains utility functions based around interaction with a Process Environment.
 
@@ -7,7 +7,6 @@
 
 
 use std::mem;
-use std::ptr::null;
 use std::slice;
 use std::fmt;
 use std::ffi::c_void;
@@ -37,7 +36,7 @@ pub struct SectionInfo {
 }
 
 
-/// Represents the result of iterating through the Import Address Table (IAT).
+/// Result of iterating through the Import Address Table (IAT).
 pub enum IATResult {
     /// The function was found in the IAT.
     Found,
@@ -48,7 +47,7 @@ pub enum IATResult {
 }
 
 
-/// Represents various errors that can occur while processing PE (Portable Executable) files.
+/// Various errors that can occur while processing PE (Portable Executable) files.
 pub enum PEError {
     /// Failed to read memory from the process.
     ReadMemoryFailed,
@@ -178,7 +177,7 @@ fn get_import_descriptors(process_handle: HANDLE, nt_headers: &IMAGE_NT_HEADERS6
 /// # Returns
 ///
 /// A `Result` containing `IATResult::Found` if the function is found, `IATResult::NotFound` if not found, or a `PEError` otherwise.
-pub fn iterate_iat(process_handle: HANDLE, base: *const u8, search_name: &str) -> Result<IATResult, PEError> 
+pub fn search_iat(process_handle: HANDLE, base: *const u8, search_name: &str) -> Result<IATResult, PEError>
 {
 
     let nt_headers = get_nt_headers(process_handle, base)?;
@@ -285,4 +284,48 @@ pub unsafe fn display_section_info(section_name: &str, process_handle: HANDLE, b
     }
 
     Ok(None)
+}
+
+
+/// Checks if the PE in the process's memory is zeroed out.
+///
+/// # Arguments
+///
+/// * `process_handle` - A handle to the process.
+/// * `base` - The base address in the process's memory.
+///
+/// # Returns
+///
+/// A `Result` containing a boolean indicating whether the PE is zeroed out, or a `PEError` otherwise.
+pub fn is_pe_zeroed_out(process_handle: HANDLE, base: *const u8) -> Result<bool, PEError>
+{
+
+    let dos_header: IMAGE_DOS_HEADER = read_memory(process_handle, base).map_err(|_| PEError::ReadMemoryFailed)?;
+
+    if dos_header.e_magic != IMAGE_DOS_SIGNATURE {
+        return Err(PEError::InvalidDosSignature);
+    }
+
+    let nt_headers_address = unsafe { base.add(dos_header.e_lfanew as usize) };
+    let nt_headers: IMAGE_NT_HEADERS64 = read_memory(process_handle, nt_headers_address).map_err(|_| PEError::ReadMemoryFailed)?;
+
+    if nt_headers.Signature != IMAGE_NT_SIGNATURE {
+        return Err(PEError::InvalidNtSignature);
+    }
+
+    let section_headers_address = unsafe { nt_headers_address.add(mem::size_of::<IMAGE_NT_HEADERS64>()) };
+
+    for i in 0..nt_headers.FileHeader.NumberOfSections
+    {
+        let section_header: IMAGE_SECTION_HEADER = read_memory(process_handle, unsafe { section_headers_address.add(i as usize * mem::size_of::<IMAGE_SECTION_HEADER>()) } as *const u8, ).map_err(|_| PEError::ReadMemoryFailed)?;
+
+        let section_data_address = unsafe { base.add(section_header.VirtualAddress as usize) };
+        let section_data: Vec<u8> = read_memory(process_handle, section_data_address).map_err(|_| PEError::ReadMemoryFailed)?;
+
+        if section_data.iter().all(|&byte| byte == 0) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }

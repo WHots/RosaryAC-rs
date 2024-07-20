@@ -1,4 +1,4 @@
-// src/ntobapi_h.rs
+//! src/ntobapi_h.rs
 
 // This module contains custom type defs from ntobapi.
 
