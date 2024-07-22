@@ -610,7 +610,7 @@ impl ProcessInfo
     ///
     /// # Safety
     /// This function contains unsafe code that interacts with the Windows API for Foreign Function Interface (FFI) operations. It calls several Windows API functions that require careful handling to maintain safety guarantees. The caller must ensure that the provided `privilege_type` is valid and that the function is used in a context where the necessary privileges are held by the process.
-    fn is_token_present(&self, privilege_type: &str) -> i32
+    pub(crate) fn is_token_present(&self, privilege_type: &str) -> i32
     {
 
         check_process_handle!(self.process_handle);

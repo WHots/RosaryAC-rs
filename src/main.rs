@@ -16,6 +16,7 @@ mod playerone;
 mod processfilters;
 mod ntexapi_h;
 mod ntobapi_h;
+mod processcore;
 
 use crate::processutils::ProcessInfo;
 

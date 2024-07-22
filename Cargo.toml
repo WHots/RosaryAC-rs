@@ -6,6 +6,7 @@ edition = "2021"
 
 [dependencies]
 widestring = "1.0.2"
+serde = { version = "1.0.204", features = ["derive"] }
 
 
 [dependencies.windows-sys]

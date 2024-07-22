@@ -12,7 +12,7 @@ use std::fmt::Debug;
 use std::mem::size_of;
 use std::ptr::null_mut;
 use std::{mem, slice};
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree, PSID, STATUS_INFO_LENGTH_MISMATCH};
+use windows_sys::Win32::Foundation::{HANDLE, LocalFree, PSID, STATUS_INFO_LENGTH_MISMATCH};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
 use windows_sys::Win32::System::Threading::{OpenProcess, GetCurrentProcessId, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, GetCurrentProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER, TOKEN_QUERY, EqualSid, TOKEN_ACCESS_MASK};
@@ -20,8 +20,8 @@ use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
 
 use crate::memorymanage::CleanHandle;
-use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION, SYSTEM_HANDLE_INFORMATION_EX, SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX, SystemInformationClass};
-use crate::ntexapi_h::SystemInformationClass::{SystemExtendedHandleInformation, SystemHandleInformation};
+use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION_EX, SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX};
+use crate::ntexapi_h::SystemInformationClass::{SystemExtendedHandleInformation};
 use crate::ntpsapi_h::NtQuerySystemInformation;
 
 const TOKEN_ACCESS_TYPE: TOKEN_ACCESS_MASK = TOKEN_QUERY;

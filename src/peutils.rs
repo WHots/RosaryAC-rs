@@ -297,7 +297,7 @@ pub unsafe fn display_section_info(section_name: &str, process_handle: HANDLE, b
 /// # Returns
 ///
 /// A `Result` containing a boolean indicating whether the PE is zeroed out, or a `PEError` otherwise.
-pub fn is_pe_zeroed_out(process_handle: HANDLE, base: *const u8) -> Result<bool, PEError>
+pub fn is_pe_zeroed(process_handle: HANDLE, base: *const u8) -> Result<bool, PEError>
 {
 
     let dos_header: IMAGE_DOS_HEADER = read_memory(process_handle, base).map_err(|_| PEError::ReadMemoryFailed)?;
