@@ -1,3 +1,11 @@
+//! src/fileutils.rs
+
+// This module contains utility functions based around file operations.
+
+
+
+
+
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -7,8 +15,8 @@ use std::path::Path;
 use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
-
-
+use digest::Digest;
+use sha2::Sha256;
 
 
 #[derive(Debug)]
@@ -68,6 +76,41 @@ pub fn get_file_internal_name(file_path: &OsStr) -> Result<OsString, FileVersion
     let internal_name_wide = unsafe { std::slice::from_raw_parts(buffer as *const u16, length as usize / 2) };
 
     Ok(OsString::from_wide(internal_name_wide))
+}
+
+
+/// Calculates the MD5 signature of a file.
+///
+/// # Arguments
+///
+/// * `file_path` - A reference to an `OsStr` that represents the path to the file.
+///
+/// # Errors
+///
+/// Returns an `io::Error` if the file cannot be opened or read.
+///
+/// # Returns
+///
+/// A `Result` containing either the calculated MD5 signature as a hexadecimal string or an `io::Error`.
+pub fn get_file_sha256(file_path: &OsStr) -> io::Result<String>
+{
+
+    let path = Path::new(file_path);
+    let mut file = File::open(path)?;
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 8192];
+
+    loop {
+        let bytes_read = file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    let result = hasher.finalize();
+    Ok(format!("{:x}", result))
 }
 
 

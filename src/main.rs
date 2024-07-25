@@ -43,7 +43,7 @@ fn main()
         println!("Processing PID: {}", pid);
     });
 
-    let pid: u32 = 15612; //    unsafe { GetCurrentProcessId() };
+    let pid: u32 = unsafe { GetCurrentProcessId() };
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 
     let process_info = ProcessInfo::new(pid, process_handle);

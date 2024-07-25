@@ -129,6 +129,13 @@ pub mod memory_tools
 
         if success == 0 || bytes_read != mem::size_of::<T>() 
         {
+            let error_code = unsafe { GetLastError() };
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: {}", error_code);
+                println!("{}:{}", file!(), line!());
+            }
+
             return Err(format!("Failed to read memory at address {:?}. Error code: {}", address, unsafe { GetLastError() } ));
         }
 

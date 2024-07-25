@@ -31,14 +31,14 @@ pub enum ProcessDataError
 impl fmt::Display for ProcessDataError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ProcessDataError::ImagePathError(msg) => write!(f, "Image path error: {}", msg),
-            ProcessDataError::DebuggerError(msg) => write!(f, "Debugger check error: {}", msg),
-            ProcessDataError::PebBaseAddressError(msg) => write!(f, "PEB base address error: {}", msg),
-            ProcessDataError::Wow64Error(msg) => write!(f, "WOW64 check error: {}", msg),
-            ProcessDataError::ProtectionError(msg) => write!(f, "Protection check error: {}", msg),
-            ProcessDataError::SecurityError(msg) => write!(f, "Security check error: {}", msg),
+            ProcessDataError::ImagePathError(msg) => write!(f, "Failed Fetching Image Path: {}", msg),
+            ProcessDataError::DebuggerError(msg) => write!(f, "Debugger Check Error: {}", msg),
+            ProcessDataError::PebBaseAddressError(msg) => write!(f, "PEB Base Address Error: {}", msg),
+            ProcessDataError::Wow64Error(msg) => write!(f, "WOW64 Check Error: {}", msg),
+            ProcessDataError::ProtectionError(msg) => write!(f, "Protection Check Error: {}", msg),
+            ProcessDataError::SecurityError(msg) => write!(f, "Security Check Error: {}", msg),
             ProcessDataError::ElevationError(msg) => write!(f, "Elevation check error: {}", msg),
-            ProcessDataError::HandleCountError(msg) => write!(f, "Handle count error: {}", msg),
+            ProcessDataError::HandleCountError(msg) => write!(f, "Handle Count Error: {}", msg),
         }
     }
 }

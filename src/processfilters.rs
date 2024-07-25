@@ -12,7 +12,7 @@ use std::fmt::Debug;
 use std::mem::size_of;
 use std::ptr::null_mut;
 use std::{mem, slice};
-use windows_sys::Win32::Foundation::{HANDLE, LocalFree, PSID, STATUS_INFO_LENGTH_MISMATCH};
+use windows_sys::Win32::Foundation::{GetLastError, HANDLE, LocalFree, PSID, STATUS_INFO_LENGTH_MISMATCH};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
 use windows_sys::Win32::System::Threading::{OpenProcess, GetCurrentProcessId, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, GetCurrentProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER, TOKEN_QUERY, EqualSid, TOKEN_ACCESS_MASK};
@@ -166,6 +166,13 @@ impl ProcessEnumerator
 
         if unsafe { Process32FirstW(snapshot_handle.as_raw(), &mut process_entry) } == 0
         {
+            let error_code = unsafe { GetLastError() };
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: {}", error_code);
+                println!("{}:{}", file!(), line!());
+            }
+
             return Err(ProcessEnumError::ProcessEnumerationFailed);
         }
 
@@ -228,6 +235,14 @@ impl ProcessEnumerator
                     let offset = mem::size_of::<SYSTEM_HANDLE_INFORMATION_EX>() + i * handle_entry_size;
 
                     if offset + handle_entry_size > buffer.len() {
+
+                        let error_code = unsafe { GetLastError() };
+                        #[cfg(debug_assertions)]
+                        {
+                            println!("Error: {}", error_code);
+                            println!("{}:{}", file!(), line!());
+                        }
+
                         return Err("Buffer overflow".to_string());
                     }
 
@@ -246,10 +261,26 @@ impl ProcessEnumerator
                 buffer_size *= 2;
 
                 if buffer_size > 1024 * 1024 * 1024 {
+
+                    let error_code = unsafe { GetLastError() };
+                    #[cfg(debug_assertions)]
+                    {
+                        println!("Error: {}", error_code);
+                        println!("{}:{}", file!(), line!());
+                    }
+
                     return Err("Buffer size exceeded reasonable limits".to_string());
                 }
 
             } else {
+
+                let error_code = unsafe { GetLastError() };
+                #[cfg(debug_assertions)]
+                {
+                    println!("Error: {}", error_code);
+                    println!("{}:{}", file!(), line!());
+                }
+
                 return Err(format!("NtQuerySystemInformation failed with status: {:#x}", status));
             }
         }

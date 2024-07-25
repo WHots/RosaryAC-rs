@@ -1,4 +1,4 @@
-// src/service_manager.rs
+//! src/playerone.rs
 
 // This module is used to query information about the host machine and its overall environment.
 // The information gathered plays a role in determining wildcard factors for undetermined threats.

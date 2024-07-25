@@ -146,6 +146,15 @@ impl ProcessInfo
         let mut cb_needed: u32 = 0;
 
         if unsafe { EnumProcessModulesEx(self.process_handle, &mut h_module, std::mem::size_of_val(&h_module) as u32, &mut cb_needed, LIST_MODULES_ALL) == 0 } {
+
+            let error_code = unsafe { GetLastError() };
+
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: {}", error_code);
+                println!("{}:{}", file!(), line!());
+            }
+
             return Err(format!("Failed to enumerate process modules. Error code: {}", unsafe { GetLastError() }));
         }
 
@@ -201,6 +210,14 @@ impl ProcessInfo
     
         if result == 0 
         {
+            let error_code = unsafe { GetLastError() };
+
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: {}", error_code);
+                println!("{}:{}", file!(), line!());
+            }
+
             return Err("Failed to get qualified image name.");
         }
     
@@ -238,6 +255,12 @@ impl ProcessInfo
 
         if status != 0
         {
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: Failed to query debug port. NTSTATUS: {}", status);
+                println!("{}:{}", file!(), line!());
+            }
+
             return Err(format!("Failed to query debug port. NTSTATUS: {}", status));
         }
 
@@ -274,6 +297,12 @@ impl ProcessInfo
 
         if status != 0
         {
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: Failed to query process information. NTSTATUS: {}", status);
+                println!("{}:{}", file!(), line!());
+            }
+
             return Err(format!("Failed to query process information. NTSTATUS: {}", status));
         }
 
@@ -312,6 +341,12 @@ impl ProcessInfo
 
         if status != 0
         {
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: Failed to query process information. NTSTATUS: {}", status);
+                println!("{}:{}", file!(), line!());
+            }
+
             return Err(format!("Failed to query process information. NTSTATUS: {}", status));
         }
 
@@ -351,6 +386,12 @@ impl ProcessInfo
 
         if status != 0
         {
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: Failed to query process information. NTSTATUS: {}", status);
+                println!("{}:{}", file!(), line!());
+            }
+
             return Err(format!("Failed to query process information. NTSTATUS: {}", status));
         }
 
@@ -390,6 +431,12 @@ impl ProcessInfo
 
         if status != 0
         {
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: Failed to query process information. NTSTATUS: {}", status);
+                println!("{}:{}", file!(), line!());
+            }
+
             return Err(format!("Failed to query process information. NTSTATUS: {}", status));
         }
 
@@ -423,7 +470,16 @@ impl ProcessInfo
         };
 
         if token_opened == 0 {
-            return Err(format!("No Process Token Opened: {}", unsafe { GetLastError() }));
+
+            let error_code = unsafe { GetLastError() };
+
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: No Process Token Opened: {}:", error_code);
+                println!("{}:{}", file!(), line!());
+            }
+
+            return Err(format!("No Process Token Opened: {}", error_code));
         }
 
         let safe_handle = match CleanHandle::new(token_handle) {
@@ -446,7 +502,15 @@ impl ProcessInfo
 
         if token_info == 0
         {
-            return Err(format!("Token Information Was Zero: {}", unsafe { GetLastError() }));
+            let error_code = unsafe { GetLastError() };
+
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: {}", error_code);
+                println!("{}:{}", file!(), line!());
+            }
+
+            return Err(format!("Token Information Was Zero: {}", error_code));
         }
 
         Ok(elevation.TokenIsElevated != 0)
@@ -551,51 +615,50 @@ impl ProcessInfo
     /// `NtQuerySystemInformation`, which is not guaranteed to be safe.
     pub fn get_current_handle_count(&self, pid: u32, object_type: u8) -> Result<i32, NTSTATUS>
     {
+        let mut buffer_size = 0;
+        let mut buffer: Vec<u8>;
+        let mut status: NTSTATUS;
 
-        unsafe {
+        unsafe { status = NtQuerySystemInformation(SystemInformationClass::SystemHandleInformation, std::ptr::null_mut(), 0, &mut buffer_size); }
 
-            let mut buffer_size = 0;
-            let mut buffer: Vec<u8>;
-            let mut status: NTSTATUS;
+        if status != STATUS_INFO_LENGTH_MISMATCH
+        {
+            let error_code = unsafe { GetLastError() };
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: {}", error_code);
+                println!("{}:{}", file!(), line!());
+            }
+            return Err(status);
+        }
 
-            status = NtQuerySystemInformation(SystemInformationClass::SystemHandleInformation, std::ptr::null_mut(), 0, &mut buffer_size);
+        loop {
+            buffer = vec![0; buffer_size as usize];
+            unsafe { status = NtQuerySystemInformation(SystemInformationClass::SystemHandleInformation, buffer.as_mut_ptr() as *mut _, buffer.len() as u32, &mut buffer_size); }
 
             if status != STATUS_INFO_LENGTH_MISMATCH {
-                return Err(status);
+                break;
             }
-
-            loop {
-                buffer = vec![0; buffer_size as usize];
-                status = NtQuerySystemInformation(SystemInformationClass::SystemHandleInformation, buffer.as_mut_ptr() as *mut _, buffer.len() as u32, &mut buffer_size);
-
-                if status != STATUS_INFO_LENGTH_MISMATCH {
-                    break;
-                }
-            }
-
-            let handle_count = usize::from_ne_bytes(buffer[0..8].try_into().unwrap());
-
-            let handles_offset = 8;
-            let handle_size = 24;
-            let mut count = 0;
-
-            for i in 0..handle_count
-            {
-                let base = handles_offset + i * handle_size;
-                let handle_pid = u16::from_ne_bytes(buffer[base..base+2].try_into().unwrap()) as u32;
-                let handle_type = buffer[base + 4];
-
-                if handle_pid == pid && handle_type == object_type
-                {
-                    count += 1;
-                }
-            }
-
-            Ok(count)
         }
+
+        let handle_count = u64::from_ne_bytes(buffer[0..8].try_into().unwrap()) as usize;
+        let handles_offset = 8;
+        let handle_size = 24;
+        let mut count = 0;
+
+        for i in 0..handle_count
+        {
+            let base = handles_offset + i * handle_size;
+            let handle_pid = u32::from_ne_bytes(buffer[base..base+4].try_into().unwrap());
+            let handle_type = buffer[base + 4];
+
+            if handle_pid == pid && handle_type == object_type {
+                count += 1;
+            }
+        }
+
+        Ok(count as i32)
     }
-
-
 
 
     //// Checks if the current process has a specified privilege enabled.
@@ -610,7 +673,7 @@ impl ProcessInfo
     ///
     /// # Safety
     /// This function contains unsafe code that interacts with the Windows API for Foreign Function Interface (FFI) operations. It calls several Windows API functions that require careful handling to maintain safety guarantees. The caller must ensure that the provided `privilege_type` is valid and that the function is used in a context where the necessary privileges are held by the process.
-    pub(crate) fn is_token_present(&self, privilege_type: &str) -> i32
+    pub fn is_token_present(&self, privilege_type: &str) -> i32
     {
 
         check_process_handle!(self.process_handle);
@@ -623,6 +686,14 @@ impl ProcessInfo
         let mut luid = LUID { LowPart: 0, HighPart: 0 };
 
         if unsafe { LookupPrivilegeValueW(ptr::null(), privilege_type_wide.as_ptr(), &mut luid) } == 0 {
+
+            let error_code = unsafe { GetLastError() };
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: {}", error_code);
+                println!("{}:{}", file!(), line!());
+            }
+
             return fail;
         }
 
@@ -640,6 +711,14 @@ impl ProcessInfo
         let res = unsafe { OpenProcessToken(self.process_handle, TOKEN_ACCESS_TYPE, &mut token_handle) };
 
         if res == 0 {
+
+            let error_code = unsafe { GetLastError() };
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: {}", error_code);
+                println!("{}:{}", file!(), line!());
+            }
+
             return fail;
         }
 
@@ -658,6 +737,13 @@ impl ProcessInfo
         }
         else
         {
+            let error_code = unsafe { GetLastError() };
+            #[cfg(debug_assertions)]
+            {
+                println!("Error: {}", error_code);
+                println!("{}:{}", file!(), line!());
+            }
+
             fail
         }
     }
