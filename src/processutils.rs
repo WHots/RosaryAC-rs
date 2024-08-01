@@ -11,20 +11,23 @@ use std::ffi::{c_void, OsStr, OsString};
 use std::path::Path;
 use std::{mem, ptr};
 use std::mem::size_of;
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use windows_sys::Win32::Foundation::{BOOL, BOOLEAN, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID, NTSTATUS, STATUS_INFO_LENGTH_MISMATCH, STATUS_SUCCESS};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetProcessIdOfThread, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_ACCESS_RIGHTS, THREAD_QUERY_INFORMATION};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 
-use windows_sys::Win32::Security::{GetTokenInformation, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SE_PRIVILEGE_ENABLED, TOKEN_ACCESS_MASK, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
+use windows_sys::Win32::Security::{AllocateLocallyUniqueId, GetTokenInformation, LookupPrivilegeNameW, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SE_PRIVILEGE_ENABLED, TOKEN_ACCESS_MASK, TOKEN_ELEVATION, TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TokenElevation};
 use windows_sys::Win32::System::SystemServices::PRIVILEGE_SET_ALL_NECESSARY;
+use crate::debug_log;
 
 use crate::memorymanage::CleanHandle;
 use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION, SYSTEM_HANDLE_TABLE_ENTRY_INFO, SystemInformationClass};
 use crate::ntexapi_h::SystemInformationClass::SystemHandleInformation;
-use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInformationThread, NtQuerySystemInformation, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
+use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInformationThread, NtQueryInformationToken, NtQuerySystemInformation, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
+use crate::winnt_h::{TOKEN_PRIVILEGES, TokenInformationClass};
+use crate::winnt_h::TokenInformationClass::TokenPrivileges;
 
 
 macro_rules! check_process_handle {
@@ -80,7 +83,103 @@ impl ProcessInfo
     }
 
 
-    
+    /// Returns the `CLIENT_ID` for a thread given its handle.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure `h_thread` is a valid handle to a thread that has not exited.
+    /// The function is unsafe due to raw pointer operations and system call usage.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<CLIENT_ID>` which is `Some` if successful, or `None` otherwise.
+    #[inline]
+    fn get_thread_client_id(h_thread: HANDLE) -> Option<CLIENT_ID>
+    {
+        let mut thread_info: THREAD_BASIC_INFORMATION = unsafe { mem::zeroed() };
+
+        let status = unsafe {
+            NtQueryInformationThread(
+                h_thread,
+                THREADINFOCLASS::ThreadBasicInformation,
+                &mut thread_info as *mut _ as *mut c_void,
+                mem::size_of::<THREAD_BASIC_INFORMATION>() as u32,
+                ptr::null_mut(),
+            )
+        };
+
+        if status == 0
+        {
+            Some(thread_info.client_id)
+        } else {
+            None
+        }
+    }
+
+
+    /// This function checks if a given privilege matches the specified token identifier.
+    ///
+    /// # Arguments
+    /// * `privilege` - A reference to an `LUID_AND_ATTRIBUTES` structure representing the privilege to check.
+    /// * `token_identifier` - A string representing the token identifier. It can be in the format "LowPart,HighPart" or the name of the privilege.
+    ///
+    /// # Returns
+    /// * `true` if the privilege matches the specified token identifier, otherwise `false`.
+    ///
+    /// # Safety
+    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
+    #[inline]
+    fn is_matching_privilege(&self, privilege: &LUID_AND_ATTRIBUTES, token_identifier: &str) -> bool
+    {
+
+        if let Some((low, high)) = token_identifier.split_once(',') {
+            if let (Ok(low_part), Ok(high_part)) = (low.trim().parse::<u32>(), high.trim().parse::<i32>()) {
+                return privilege.Luid.LowPart == low_part && privilege.Luid.HighPart == high_part;
+            }
+        }
+
+        let mut name_buffer = [0u16; 256];
+        let mut name_size = name_buffer.len() as u32;
+
+        unsafe {
+            if LookupPrivilegeNameW(ptr::null(), &privilege.Luid as *const LUID, name_buffer.as_mut_ptr(), &mut name_size, ) != 0 {
+                let privilege_name = String::from_utf16_lossy(&name_buffer[..name_size as usize]);
+                return privilege_name.trim_end_matches('\0') == token_identifier;
+            }
+        }
+
+        false
+    }
+
+
+    /// This function checks if a thread has the "hide from debugger" flag enabled.
+    ///
+    /// # Arguments
+    /// * `h_thread` - Handle to the thread to check.
+    ///
+    /// # Returns
+    /// * `true` if the thread has the "hide from debugger" flag set, otherwise `false`.
+    ///
+    /// # Safety
+    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
+    #[inline]
+    fn is_thread_hidden_from_debugger(h_thread: HANDLE) -> bool
+    {
+        let mut thread_hidden: u32 = 0;
+
+        let status = unsafe {
+            NtQueryInformationThread(
+                h_thread,
+                THREADINFOCLASS::ThreadHideFromDebugger,
+                &mut thread_hidden as *mut _ as *mut c_void,
+                std::mem::size_of::<u32>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+
+        status == 0 && thread_hidden != 0
+    }
+
 
     /// Checks if a specific process module exists.
     ///
@@ -91,16 +190,15 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `bool` - `true` if the module exists, otherwise `false`.
-    pub fn module_exists(&self, module_name: &OsStr) -> bool 
+    pub fn module_exists(&self, module_name: &OsStr) -> bool
     {
-        
         check_process_handle!(self.process_handle);
 
         const MAX_MODULES: usize = 1024;
         let mut h_modules: Vec<HMODULE> = vec![0; MAX_MODULES];
         let mut cb_needed: u32 = 0;
 
-        if unsafe { EnumProcessModulesEx(self.process_handle, h_modules.as_mut_ptr(), (MAX_MODULES * std::mem::size_of::<HMODULE>()) as u32, &mut cb_needed, LIST_MODULES_ALL,) } == 0 
+        if unsafe { EnumProcessModulesEx(self.process_handle, h_modules.as_mut_ptr(), (MAX_MODULES * std::mem::size_of::<HMODULE>()) as u32, &mut cb_needed, LIST_MODULES_ALL, ) } == 0
         {
             return false;
         }
@@ -109,23 +207,22 @@ impl ProcessInfo
         let mut buffer = vec![0u16; 260];
 
         //  Idiomatic because im an idiot.
-        (0..module_count).any(|i| 
-        {
-            let result = unsafe { GetModuleFileNameExW( self.process_handle, h_modules[i], buffer.as_mut_ptr(), buffer.len() as u32,) };
-
-            if result == 0 
+        (0..module_count).any(|i|
             {
-                return false;
-            }
+                let result = unsafe { GetModuleFileNameExW(self.process_handle, h_modules[i], buffer.as_mut_ptr(), buffer.len() as u32, ) };
 
-            let len = buffer.iter().position(|&x| x == 0).unwrap_or(buffer.len());
-            let module_path = OsString::from_wide(&buffer[..len]);
-            let module_name_in_path = Path::new(&module_path).file_name().unwrap_or(OsStr::new(""));
+                if result == 0
+                {
+                    return false;
+                }
 
-            module_name_in_path == module_name
-        })
+                let len = buffer.iter().position(|&x| x == 0).unwrap_or(buffer.len());
+                let module_path = OsString::from_wide(&buffer[..len]);
+                let module_name_in_path = Path::new(&module_path).file_name().unwrap_or(OsStr::new(""));
+
+                module_name_in_path == module_name
+            })
     }
-
 
 
     /// Retrieves the handle and size of the main module of the process.
@@ -137,16 +234,14 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<(HMODULE, usize), String>` - The handle and size of the main module or an error.
-    pub fn get_main_module_ex(&self) -> Result<(*const u8, usize), String> 
+    pub fn get_main_module_ex(&self) -> Result<(*const u8, usize), String>
     {
-
         check_process_handle!(self.process_handle);
 
         let mut h_module: HMODULE = unsafe { std::mem::zeroed() };
         let mut cb_needed: u32 = 0;
 
         if unsafe { EnumProcessModulesEx(self.process_handle, &mut h_module, std::mem::size_of_val(&h_module) as u32, &mut cb_needed, LIST_MODULES_ALL) == 0 } {
-
             let error_code = unsafe { GetLastError() };
 
             #[cfg(debug_assertions)]
@@ -191,43 +286,28 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<&'a OsStr, &'static str>` - A reference to the `OsStr` slice containing the file path of the main module, or an error if the operation fails.
-    pub fn get_process_image_path_ex(&self) -> Result<OsString, &'static str> 
+    pub fn get_process_image_path_ex(&self) -> Result<OsString, &'static str>
     {
-
         check_process_handle!(self.process_handle);
-    
+
         const MAX_PATH: usize = 260;
         let mut buffer = vec![0u16; MAX_PATH];
-    
-        let result = unsafe {
-            GetModuleFileNameExW(
-                self.process_handle,
-                0,
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-            )
-        };
-    
-        if result == 0 
+
+        let result = unsafe { GetModuleFileNameExW(self.process_handle, 0, buffer.as_mut_ptr(), buffer.len() as u32, ) };
+
+        if result == 0
         {
             let error_code = unsafe { GetLastError() };
-
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: {}", error_code);
-                println!("{}:{}", file!(), line!());
-            }
-
+            debug_log!(format!("Error getting process image name: {}", error_code));
             return Err("Failed to get qualified image name.");
         }
-    
+
         let len = buffer.iter().position(|&x| x == 0).unwrap_or(buffer.len());
         buffer.truncate(len);
-    
+
         let output = OsString::from_wide(&buffer);
         Ok(output)
     }
-    
 
 
     // Checks if the process is being debugged by querying the debug port.
@@ -237,30 +317,16 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is being debugged, otherwise `false`.
     pub fn is_debugger(&self) -> Result<bool, String>
     {
-
         check_process_handle!(self.process_handle);
 
         let mut debug_port: isize = 0;
         let mut return_length: u32 = 0;
 
-        let status = unsafe {
-            NtQueryInformationProcess(
-                self.process_handle,
-                ProcessInformationClass::ProcessDebugPort as u32,
-                &mut debug_port as *mut _ as *mut c_void,
-                size_of::<isize>() as u32,
-                &mut return_length,
-            )
-        };
+        let status = unsafe { NtQueryInformationProcess(self.process_handle, ProcessInformationClass::ProcessDebugPort as u32, &mut debug_port as *mut _ as *mut c_void, size_of::<isize>() as u32, &mut return_length, ) };
 
         if status != 0
         {
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: Failed to query debug port. NTSTATUS: {}", status);
-                println!("{}:{}", file!(), line!());
-            }
-
+            debug_log!(format!("Error checking for debugger flag: {}", status));
             return Err(format!("Failed to query debug port. NTSTATUS: {}", status));
         }
 
@@ -279,30 +345,16 @@ impl ProcessInfo
     /// * `Result<*mut PEB, String>` - The base address of the PEB or an error.
     pub fn get_peb_base_address(&self) -> Result<*mut PEB, String>
     {
-
         check_process_handle!(self.process_handle);
 
         let mut pbi: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         let mut return_length: u32 = 0;
 
-        let status = unsafe {
-            NtQueryInformationProcess(
-                self.process_handle,
-                ProcessInformationClass::ProcessBasicInformation as u32,
-                &mut pbi as *mut _ as *mut _,
-                std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,
-                &mut return_length,
-            )
-        };
+        let status = unsafe { NtQueryInformationProcess(self.process_handle, ProcessInformationClass::ProcessBasicInformation as u32, &mut pbi as *mut _ as *mut _, std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32, &mut return_length, ) };
 
         if status != 0
         {
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: Failed to query process information. NTSTATUS: {}", status);
-                println!("{}:{}", file!(), line!());
-            }
-
+            debug_log!(format!("Error getting peb base address: {}", status));
             return Err(format!("Failed to query process information. NTSTATUS: {}", status));
         }
 
@@ -321,7 +373,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is running under WOW64, `false` otherwise, or an error.
     pub fn is_wow64(&self) -> Result<bool, String>
     {
-
         check_process_handle!(self.process_handle);
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = PROCESS_EXTENDED_BASIC_INFORMATION::new();
@@ -329,24 +380,11 @@ impl ProcessInfo
 
         let mut return_length: u32 = 0;
 
-        let status = unsafe {
-            NtQueryInformationProcess(
-                self.process_handle,
-                ProcessInformationClass::ProcessBasicInformation as u32,
-                &mut pebi as *mut _ as *mut _,
-                std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,
-                &mut return_length,
-            )
-        };
+        let status = unsafe { NtQueryInformationProcess(self.process_handle, ProcessInformationClass::ProcessBasicInformation as u32, &mut pebi as *mut _ as *mut _, std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32, &mut return_length, ) };
 
         if status != 0
         {
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: Failed to query process information. NTSTATUS: {}", status);
-                println!("{}:{}", file!(), line!());
-            }
-
+            debug_log!(format!("Error checking if WoW64 imm: {}", status));
             return Err(format!("Failed to query process information. NTSTATUS: {}", status));
         }
 
@@ -366,7 +404,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is protected, `false` otherwise, or an error.
     pub fn is_protected_process(&self) -> Result<bool, String>
     {
-
         check_process_handle!(self.process_handle);
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
@@ -386,12 +423,7 @@ impl ProcessInfo
 
         if status != 0
         {
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: Failed to query process information. NTSTATUS: {}", status);
-                println!("{}:{}", file!(), line!());
-            }
-
+            debug_log!(format!("Error checking if protected process: {}", status));
             return Err(format!("Failed to query process information. NTSTATUS: {}", status));
         }
 
@@ -411,7 +443,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is a secure process, `false` otherwise, or an error.
     pub fn is_secure_process(&self) -> Result<bool, String>
     {
-
         check_process_handle!(self.process_handle);
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
@@ -419,24 +450,11 @@ impl ProcessInfo
 
         let mut return_length: u32 = 0;
 
-        let status = unsafe {
-            NtQueryInformationProcess(
-                self.process_handle,
-                ProcessInformationClass::ProcessBasicInformation as u32,
-                &mut pebi as *mut _ as *mut _,
-                pebi.Size as u32,
-                &mut return_length,
-            )
-        };
+        let status = unsafe { NtQueryInformationProcess(self.process_handle, ProcessInformationClass::ProcessBasicInformation as u32, &mut pebi as *mut _ as *mut _, pebi.Size as u32, &mut return_length, ) };
 
         if status != 0
         {
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: Failed to query process information. NTSTATUS: {}", status);
-                println!("{}:{}", file!(), line!());
-            }
-
+            debug_log!(format!("Error checking if secure process: {}", status));
             return Err(format!("Failed to query process information. NTSTATUS: {}", status));
         }
 
@@ -456,29 +474,15 @@ impl ProcessInfo
     /// Returns `Ok(true)` if the process is elevated, or `Ok(false)` otherwise.
     pub fn is_process_elevated(&self) -> Result<bool, String>
     {
-
         check_process_handle!(self.process_handle);
 
         let mut token_handle: HANDLE = 0;
 
-        let token_opened: BOOL = unsafe {
-            OpenProcessToken(
-                self.process_handle,
-                TOKEN_ACCESS_TYPE,
-                &mut token_handle,
-            )
-        };
+        let token_opened: BOOL = unsafe { OpenProcessToken(self.process_handle, TOKEN_ACCESS_TYPE, &mut token_handle, ) };
 
         if token_opened == 0 {
-
             let error_code = unsafe { GetLastError() };
-
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: No Process Token Opened: {}:", error_code);
-                println!("{}:{}", file!(), line!());
-            }
-
+            debug_log!(format!("Error checking if elevated process: {}", error_code));
             return Err(format!("No Process Token Opened: {}", error_code));
         }
 
@@ -490,26 +494,12 @@ impl ProcessInfo
         let mut elevation: TOKEN_ELEVATION = TOKEN_ELEVATION { TokenIsElevated: 0 };
         let mut size: u32 = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
 
-        let token_info: BOOL = unsafe {
-            GetTokenInformation(
-                safe_handle.as_raw(),
-                TokenElevation,
-                &mut elevation as *mut _ as *mut _,
-                size,
-                &mut size,
-            )
-        };
+        let token_info: BOOL = unsafe { GetTokenInformation(safe_handle.as_raw(), TokenElevation, &mut elevation as *mut _ as *mut _, size, &mut size, ) };
 
         if token_info == 0
         {
             let error_code = unsafe { GetLastError() };
-
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: {}", error_code);
-                println!("{}:{}", file!(), line!());
-            }
-
+            debug_log!(format!("Error checking if elevated process: {}", error_code));
             return Err(format!("Token Information Was Zero: {}", error_code));
         }
 
@@ -534,7 +524,6 @@ impl ProcessInfo
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
     pub fn query_thread_information(&self) -> HashMap<String, usize>
     {
-
         let mut counts = HashMap::new();
 
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, self.pid) };
@@ -552,11 +541,9 @@ impl ProcessInfo
 
 
         unsafe {
-
             if Thread32First(snapshot.as_raw(), &mut thread_entry) != 0
             {
                 loop {
-
                     if thread_entry.th32OwnerProcessID == self.pid
                     {
                         total_count += 1;
@@ -624,11 +611,7 @@ impl ProcessInfo
         if status != STATUS_INFO_LENGTH_MISMATCH
         {
             let error_code = unsafe { GetLastError() };
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: {}", error_code);
-                println!("{}:{}", file!(), line!());
-            }
+            debug_log!(format!("Error getting handle count: {}", error_code));
             return Err(status);
         }
 
@@ -649,7 +632,7 @@ impl ProcessInfo
         for i in 0..handle_count
         {
             let base = handles_offset + i * handle_size;
-            let handle_pid = u32::from_ne_bytes(buffer[base..base+4].try_into().unwrap());
+            let handle_pid = u32::from_ne_bytes(buffer[base..base + 4].try_into().unwrap());
             let handle_type = buffer[base + 4];
 
             if handle_pid == pid && handle_type == object_type {
@@ -660,11 +643,10 @@ impl ProcessInfo
         Ok(count as i32)
     }
 
-
     //// Checks if the current process has a specified privilege enabled.
     ///
     /// # Arguments
-    /// * `privilege_type` - The name of the privilege to check, as a string slice.
+    /// * `token_identifier` - The name of the privilege to check, as a string slice.
     ///
     /// # Returns
     /// An `i32` value:
@@ -673,52 +655,18 @@ impl ProcessInfo
     ///
     /// # Safety
     /// This function contains unsafe code that interacts with the Windows API for Foreign Function Interface (FFI) operations. It calls several Windows API functions that require careful handling to maintain safety guarantees. The caller must ensure that the provided `privilege_type` is valid and that the function is used in a context where the necessary privileges are held by the process.
-    pub fn is_token_present(&self, privilege_type: &str) -> i32
+    pub fn get_enabled_token_count(&self, token_identifier: &str) -> i32
     {
 
         check_process_handle!(self.process_handle);
 
         let fail = -1;
-        let mut status: NTSTATUS = 0;
-
-        let privilege_type_wide: Vec<u16> = privilege_type.encode_utf16().chain(Some(0)).collect();
-
-        let mut luid = LUID { LowPart: 0, HighPart: 0 };
-
-        if unsafe { LookupPrivilegeValueW(ptr::null(), privilege_type_wide.as_ptr(), &mut luid) } == 0 {
-
-            let error_code = unsafe { GetLastError() };
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: {}", error_code);
-                println!("{}:{}", file!(), line!());
-            }
-
-            return fail;
-        }
-
-        let mut required_privileges = PRIVILEGE_SET {
-            PrivilegeCount: 1,
-            Control: PRIVILEGE_SET_ALL_NECESSARY,
-            Privilege: [LUID_AND_ATTRIBUTES {
-                Luid: luid,
-                Attributes: SE_PRIVILEGE_ENABLED,
-            }; 1],
-        };
 
         let mut token_handle: HANDLE = INVALID_HANDLE_VALUE;
 
-        let res = unsafe { OpenProcessToken(self.process_handle, TOKEN_ACCESS_TYPE, &mut token_handle) };
-
-        if res == 0 {
-
+        if unsafe { OpenProcessToken(self.process_handle, TOKEN_ACCESS_TYPE, &mut token_handle) } == 0 {
             let error_code = unsafe { GetLastError() };
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: {}", error_code);
-                println!("{}:{}", file!(), line!());
-            }
-
+            debug_log!(format!("Error opening process token: {}", error_code));
             return fail;
         }
 
@@ -727,90 +675,37 @@ impl ProcessInfo
             None => return fail,
         };
 
-        let mut has_privilege: BOOLEAN = 0;
+        let mut return_length = 0;
+        unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, ptr::null_mut(), 0, &mut return_length, ); }
 
-        status = unsafe { NtPrivilegeCheck(safe_handle.as_raw(), &mut required_privileges, &mut has_privilege) };
-
-        if status == STATUS_SUCCESS && has_privilege != 0
-        {
-            1
-        }
-        else
-        {
+        if return_length == 0 {
             let error_code = unsafe { GetLastError() };
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: {}", error_code);
-                println!("{}:{}", file!(), line!());
+            debug_log!(format!("Error querying token information size: {}", error_code));
+            return fail;
+        }
+
+        let mut buffer: Vec<u8> = vec![0; return_length as usize];
+        let token_privileges: *mut TOKEN_PRIVILEGES = buffer.as_mut_ptr() as *mut TOKEN_PRIVILEGES;
+
+        if unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, token_privileges as *mut _, return_length, &mut return_length, ) } == 0 {
+            let error_code = unsafe { GetLastError() };
+            debug_log!(format!("Error querying token information: {}", error_code));
+            return fail;
+        }
+
+        let privileges = unsafe {
+            std::slice::from_raw_parts(
+                (*token_privileges).Privileges.as_ptr(),
+                (*token_privileges).PrivilegeCount as usize
+            )
+        };
+
+        for privilege in privileges {
+            if self.is_matching_privilege(&privilege, token_identifier) {
+                return if privilege.Attributes & SE_PRIVILEGE_ENABLED != 0 { 1 } else { 0 };
             }
-
-            fail
         }
-    }
 
-
-    /// Returns the `CLIENT_ID` for a thread given its handle.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure `h_thread` is a valid handle to a thread that has not exited.
-    /// The function is unsafe due to raw pointer operations and system call usage.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<CLIENT_ID>` which is `Some` if successful, or `None` otherwise.
-    #[inline]
-    fn get_thread_client_id(h_thread: HANDLE) -> Option<CLIENT_ID>
-    {
-
-        let mut thread_info: THREAD_BASIC_INFORMATION = unsafe {mem::zeroed()};
-
-        let status = unsafe {
-            NtQueryInformationThread(
-                h_thread,
-                THREADINFOCLASS::ThreadBasicInformation,
-                &mut thread_info as *mut _ as *mut c_void,
-                mem::size_of::<THREAD_BASIC_INFORMATION>() as u32,
-                ptr::null_mut(),
-            )
-        };
-
-        if status == 0
-        {
-            Some(thread_info.client_id)
-        }
-        else
-        {
-            None
-        }
-    }
-
-
-    /// This function checks if a thread has the "hide from debugger" flag enabled.
-    ///
-    /// # Arguments
-    /// * `h_thread` - Handle to the thread to check.
-    ///
-    /// # Returns
-    /// * `true` if the thread has the "hide from debugger" flag set, otherwise `false`.
-    ///
-    /// # Safety
-    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
-    #[inline]
-    fn is_thread_hidden_from_debugger(h_thread: HANDLE) -> bool
-    {
-        let mut thread_hidden: u32 = 0;
-
-        let status = unsafe {
-            NtQueryInformationThread(
-                h_thread,
-                THREADINFOCLASS::ThreadHideFromDebugger,
-                &mut thread_hidden as *mut _ as *mut c_void,
-                std::mem::size_of::<u32>() as u32,
-                std::ptr::null_mut(),
-            )
-        };
-
-        status == 0 && thread_hidden != 0
+        fail
     }
 }

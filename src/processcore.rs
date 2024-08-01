@@ -19,6 +19,7 @@ pub enum ProcessDataError
 {
     ImagePathError(String),
     DebuggerError(String),
+    IsElevatedError(String),
     PebBaseAddressError(String),
     Wow64Error(String),
     ProtectionError(String),
@@ -33,6 +34,7 @@ impl fmt::Display for ProcessDataError {
         match self {
             ProcessDataError::ImagePathError(msg) => write!(f, "Failed Fetching Image Path: {}", msg),
             ProcessDataError::DebuggerError(msg) => write!(f, "Debugger Check Error: {}", msg),
+            ProcessDataError::IsElevatedError(msg) => write!(f, "Elevation Check Error: {}", msg),
             ProcessDataError::PebBaseAddressError(msg) => write!(f, "PEB Base Address Error: {}", msg),
             ProcessDataError::Wow64Error(msg) => write!(f, "WOW64 Check Error: {}", msg),
             ProcessDataError::ProtectionError(msg) => write!(f, "Protection Check Error: {}", msg),
@@ -50,17 +52,17 @@ impl std::error::Error for ProcessDataError {}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ProcessData
 {
-    pid: u32,
-    image_path: Result<String, ProcessDataError>,
-    is_debugged: Result<bool, ProcessDataError>,
+    pub(crate) pid: u32,
+    pub(crate) image_path: Result<String, ProcessDataError>,
+    pub(crate) is_debugged: Result<bool, ProcessDataError>,
+    pub (crate) is_elevated: Result<bool, ProcessDataError>,
     peb_base_address: Result<u64, ProcessDataError>,
     is_wow64: Result<bool, ProcessDataError>,
     is_protected: Result<bool, ProcessDataError>,
     is_secure: Result<bool, ProcessDataError>,
-    is_elevated: Result<bool, ProcessDataError>,
-    thread_count: HashMap<String, usize>,
-    handle_count: Result<i32, ProcessDataError>,
-    token_privileges: i32,
+    pub(crate) thread_count: HashMap<String, usize>,
+    pub(crate) handle_count: Result<i32, ProcessDataError>,
+    pub(crate) token_privileges: i32,
 }
 
 const FILE_HANDLE_TYPE: u8 = 28;
@@ -100,6 +102,7 @@ impl ProcessData {
         }
     }
 
+
     /// Fills the `ProcessData` instance with data gathered from `ProcessInfo`.
     pub fn fill_process_data(&mut self, process_info: &ProcessInfo)
     {
@@ -109,6 +112,9 @@ impl ProcessData {
 
         self.is_debugged = process_info.is_debugger()
             .map_err(|e| ProcessDataError::DebuggerError(e.to_string()));
+
+        self.is_elevated = process_info.is_process_elevated()
+            .map_err(|e| ProcessDataError::IsElevatedError(e.to_string()));
 
         self.peb_base_address = process_info.get_peb_base_address()
             .map(|addr| addr as u64)
@@ -131,6 +137,6 @@ impl ProcessData {
         self.handle_count = process_info.get_current_handle_count(self.pid, FILE_HANDLE_TYPE)
             .map_err(|e| ProcessDataError::HandleCountError(e.to_string()));
 
-        self.token_privileges = PRIVILEGE_TOKENS.iter().filter(|&&privilege| process_info.is_token_present(privilege) == 1).count() as i32;
+        self.token_privileges = PRIVILEGE_TOKENS.iter().filter(|&&privilege| process_info.get_enabled_token_count(privilege) == 1).count() as i32;
     }
 }

@@ -16,7 +16,6 @@ use windows_sys::Win32::System::WindowsProgramming::IMAGE_THUNK_DATA64;
 use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQueryEx};
 use windows_sys::Win32::System::SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_IMPORT_DESCRIPTOR, IMAGE_NT_SIGNATURE};
 
-use crate::memoryutils::memory_tools;
 use crate::memoryutils::memory_tools::read_memory;
 use crate::stringutils::{read_c_string, strings_match};
 

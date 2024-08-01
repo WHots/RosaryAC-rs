@@ -4,6 +4,8 @@ use windows_sys::Win32::Foundation::{CloseHandle, BOOL, HANDLE, MAX_PATH, NO_ERR
 use windows_sys::Win32::Security::SE_DEBUG_NAME;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentProcessId, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 use windows_sys::Win32::System::Services::{OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_MANAGER_ENUMERATE_SERVICE, SERVICE_QUERY_STATUS, SERVICE_STATUS};
+use crate::processcore::ProcessData;
+
 mod processutils;
 mod memoryutils;
 mod fileutils;
@@ -17,6 +19,7 @@ mod processfilters;
 mod ntexapi_h;
 mod ntobapi_h;
 mod processcore;
+mod debugutils;
 
 use crate::processutils::ProcessInfo;
 
@@ -35,37 +38,40 @@ const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
 fn main()
 {
 
-    let mut enumerator = ProcessEnumerator::new();
-    enumerator.enumerate_processes();
-
-
-    enumerator.process_matching_pids(|pid| {
-        println!("Processing PID: {}", pid);
-    });
-
-    let pid: u32 = unsafe { GetCurrentProcessId() };
+    let pid: u32 = 10804;
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 
     let process_info = ProcessInfo::new(pid, process_handle);
 
-    let pid = unsafe { GetCurrentProcess() } as u32;
-    let object_type = 7;
-    let handle_count = process_info.get_current_handle_count(10888, 1);
-    println!("Handle count: {:?}", handle_count);
+    let mut process_data = ProcessData::new(pid);
 
-    let mut process_enumerator = ProcessEnumerator::new();
+    process_data.fill_process_data(&process_info);
 
-    match process_enumerator.check_process_handles()
-    {
-        Ok(processes) => {
-            println!("Processes with handles to the current process:");
-            for pid in processes {
-                println!("Process ID: {}", pid);
+    println!("Process ID: {}", process_data.pid);
 
-            }
-        }
-        Err(e) => {
-            eprintln!("Error checking process handles: {}", e);
-        }
+    match &process_data.image_path {
+        Ok(path) => println!("Image Path: {}", path),
+        Err(e) => println!("Error getting image path: {}", e),
     }
+
+    match process_data.is_debugged {
+        Ok(is_debugged) => println!("Is Debugged: {}", is_debugged),
+        Err(e) => println!("Error checking if debugged: {}", e),
+    }
+
+    match process_data.is_elevated {
+        Ok(is_elevated) => println!("Is Elevated: {}", is_elevated),
+        Err(e) => println!("Error checking if elevated: {}", e),
+    }
+
+    println!("Thread Count: {:?}", process_data.thread_count);
+
+    match process_data.handle_count {
+        Ok(count) => println!("Handle Count: {}", count),
+        Err(e) => println!("Error getting handle count: {}", e),
+    }
+
+    println!("Token Privileges: {}", process_data.token_privileges);
+
+    unsafe { CloseHandle(process_handle) };
 }

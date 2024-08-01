@@ -6,6 +6,8 @@
 
 
 
+use windows_sys::Win32::Security::LUID_AND_ATTRIBUTES;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum TokenInformationClass
@@ -60,4 +62,12 @@ pub enum TokenInformationClass
     TokenIsAppSilo,
     TokenLoggingInformation,
     MaxTokenInfoClass,
+}
+
+
+#[repr(C)]
+pub struct TOKEN_PRIVILEGES
+{
+    pub PrivilegeCount: u32,
+    pub Privileges: [LUID_AND_ATTRIBUTES; 1], // Zero-length array as a flexible array member
 }

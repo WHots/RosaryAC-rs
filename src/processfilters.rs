@@ -18,6 +18,7 @@ use windows_sys::Win32::System::Threading::{OpenProcess, GetCurrentProcessId, PR
 use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER, TOKEN_QUERY, EqualSid, TOKEN_ACCESS_MASK};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
+use crate::debug_log;
 
 use crate::memorymanage::CleanHandle;
 use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION_EX, SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX};
@@ -106,14 +107,7 @@ impl ProcessEnumerator
         let mut return_length: u32 = 0;
 
         if unsafe {
-            GetTokenInformation(
-                clean_token_handle?.as_raw(),
-                TokenUser,
-                token_info.as_mut_ptr() as *mut _,
-                token_info.len() as u32,
-                &mut return_length,
-            )
-        } == 0 {
+            GetTokenInformation(clean_token_handle?.as_raw(), TokenUser, token_info.as_mut_ptr() as *mut _, token_info.len() as u32, &mut return_length, ) } == 0 {
             return None;
         }
 
@@ -122,6 +116,8 @@ impl ProcessEnumerator
 
         if unsafe { ConvertSidToStringSidW(token_user.User.Sid, &mut sid_string) } == 0
         {
+            let error_code = unsafe { GetLastError() };
+            debug_log!(format!("Error converting sid: {}", error_code));
             return None;
         }
 
@@ -167,12 +163,7 @@ impl ProcessEnumerator
         if unsafe { Process32FirstW(snapshot_handle.as_raw(), &mut process_entry) } == 0
         {
             let error_code = unsafe { GetLastError() };
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: {}", error_code);
-                println!("{}:{}", file!(), line!());
-            }
-
+            debug_log!(format!("Error failed process iteration: {}", error_code));
             return Err(ProcessEnumError::ProcessEnumerationFailed);
         }
 
@@ -237,12 +228,7 @@ impl ProcessEnumerator
                     if offset + handle_entry_size > buffer.len() {
 
                         let error_code = unsafe { GetLastError() };
-                        #[cfg(debug_assertions)]
-                        {
-                            println!("Error: {}", error_code);
-                            println!("{}:{}", file!(), line!());
-                        }
-
+                        debug_log!(format!("Error buffer error: {}", error_code));
                         return Err("Buffer overflow".to_string());
                     }
 
@@ -263,11 +249,7 @@ impl ProcessEnumerator
                 if buffer_size > 1024 * 1024 * 1024 {
 
                     let error_code = unsafe { GetLastError() };
-                    #[cfg(debug_assertions)]
-                    {
-                        println!("Error: {}", error_code);
-                        println!("{}:{}", file!(), line!());
-                    }
+                    debug_log!(format!("Error buffer too big: {}", error_code));
 
                     return Err("Buffer size exceeded reasonable limits".to_string());
                 }
@@ -275,12 +257,7 @@ impl ProcessEnumerator
             } else {
 
                 let error_code = unsafe { GetLastError() };
-                #[cfg(debug_assertions)]
-                {
-                    println!("Error: {}", error_code);
-                    println!("{}:{}", file!(), line!());
-                }
-
+                debug_log!(format!("Error NtQuerySystemInformation failed: {}", error_code));
                 return Err(format!("NtQuerySystemInformation failed with status: {:#x}", status));
             }
         }

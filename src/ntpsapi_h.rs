@@ -9,11 +9,12 @@
 use std::ffi::{c_void};
 use std::os::raw::{c_ulong, c_uint};
 use windows_sys::Win32::Foundation::{BOOLEAN, HANDLE, NTSTATUS};
-use windows_sys::Win32::Security::PRIVILEGE_SET;
+use windows_sys::Win32::Security::{PRIVILEGE_SET, TOKEN_INFORMATION_CLASS};
 use windows_sys::Win32::System::Threading::PROCESS_BASIC_INFORMATION;
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 use crate::ntexapi_h::SystemInformationClass;
 use crate::ntobapi_h::OBJECT_INFORMATION_CLASS;
+use crate::winnt_h::TokenInformationClass;
 
 
 #[repr(C)]
@@ -146,6 +147,14 @@ extern "system" {
         ObjectInformationClass: OBJECT_INFORMATION_CLASS,
         ObjectInformation: *mut c_void,
         ObjectInformationLength: u32,
+        ReturnLength: *mut u32,
+    ) -> NTSTATUS;
+
+    pub fn NtQueryInformationToken(
+        TokenHandle: HANDLE,
+        TokenInformationClass: TokenInformationClass,
+        TokenInformation: *mut c_void,
+        TokenInformationLength: u32,
         ReturnLength: *mut u32,
     ) -> NTSTATUS;
 
