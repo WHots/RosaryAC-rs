@@ -38,7 +38,7 @@ const PROCESS_FLAGS: u32 = PROCESS_ALL_ACCESS;
 fn main()
 {
 
-    let pid: u32 = 10804;
+    let pid: u32 = unsafe {GetCurrentProcessId()};
     let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
 
     let process_info = ProcessInfo::new(pid, process_handle);

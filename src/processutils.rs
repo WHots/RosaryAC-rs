@@ -22,7 +22,7 @@ use windows_sys::Win32::Security::{AllocateLocallyUniqueId, GetTokenInformation,
 use windows_sys::Win32::System::SystemServices::PRIVILEGE_SET_ALL_NECESSARY;
 use crate::debug_log;
 
-use crate::memorymanage::CleanHandle;
+use crate::memorymanage::{CleanBuffer, CleanHandle};
 use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION, SYSTEM_HANDLE_TABLE_ENTRY_INFO, SystemInformationClass};
 use crate::ntexapi_h::SystemInformationClass::SystemHandleInformation;
 use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInformationThread, NtQueryInformationToken, NtQuerySystemInformation, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
@@ -192,36 +192,34 @@ impl ProcessInfo
     /// * `bool` - `true` if the module exists, otherwise `false`.
     pub fn module_exists(&self, module_name: &OsStr) -> bool
     {
+
         check_process_handle!(self.process_handle);
 
         const MAX_MODULES: usize = 1024;
-        let mut h_modules: Vec<HMODULE> = vec![0; MAX_MODULES];
+        let mut h_modules = CleanBuffer::new(MAX_MODULES);
         let mut cb_needed: u32 = 0;
 
-        if unsafe { EnumProcessModulesEx(self.process_handle, h_modules.as_mut_ptr(), (MAX_MODULES * std::mem::size_of::<HMODULE>()) as u32, &mut cb_needed, LIST_MODULES_ALL, ) } == 0
+        if unsafe { EnumProcessModulesEx( self.process_handle, h_modules.as_mut_ptr() as *mut HMODULE, (MAX_MODULES * std::mem::size_of::<HMODULE>()) as u32, &mut cb_needed, LIST_MODULES_ALL, ) } == 0
         {
             return false;
         }
 
         let module_count = cb_needed as usize / std::mem::size_of::<HMODULE>();
-        let mut buffer = vec![0u16; 260];
+        let mut buffer = CleanBuffer::new(260);
 
-        //  Idiomatic because im an idiot.
-        (0..module_count).any(|i|
-            {
-                let result = unsafe { GetModuleFileNameExW(self.process_handle, h_modules[i], buffer.as_mut_ptr(), buffer.len() as u32, ) };
+        (0..module_count).any(|i| {
+            let result = unsafe { GetModuleFileNameExW(self.process_handle, *(h_modules.as_slice().as_ptr().add(i) as *const HMODULE), buffer.as_mut_ptr(), buffer.buffer.len() as u32, ) };
 
-                if result == 0
-                {
-                    return false;
-                }
+            if result == 0 {
+                return false;
+            }
 
-                let len = buffer.iter().position(|&x| x == 0).unwrap_or(buffer.len());
-                let module_path = OsString::from_wide(&buffer[..len]);
-                let module_name_in_path = Path::new(&module_path).file_name().unwrap_or(OsStr::new(""));
+            buffer.truncate_at_null();
+            let module_path = OsString::from_wide(buffer.as_slice());
+            let module_name_in_path = Path::new(&module_path).file_name().unwrap_or(OsStr::new(""));
 
-                module_name_in_path == module_name
-            })
+            module_name_in_path == module_name
+        })
     }
 
 
@@ -286,26 +284,23 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<&'a OsStr, &'static str>` - A reference to the `OsStr` slice containing the file path of the main module, or an error if the operation fails.
-    pub fn get_process_image_path_ex(&self) -> Result<OsString, &'static str>
-    {
+    pub fn get_process_image_path_ex(&self) -> Result<OsString, &'static str> {
         check_process_handle!(self.process_handle);
 
         const MAX_PATH: usize = 260;
-        let mut buffer = vec![0u16; MAX_PATH];
+        let mut buffer = CleanBuffer::new(MAX_PATH);
 
-        let result = unsafe { GetModuleFileNameExW(self.process_handle, 0, buffer.as_mut_ptr(), buffer.len() as u32, ) };
+        let result = unsafe { GetModuleFileNameExW(self.process_handle, 0, buffer.as_mut_ptr(), buffer.buffer.len() as u32, ) };
 
-        if result == 0
-        {
+        if result == 0 {
             let error_code = unsafe { GetLastError() };
             debug_log!(format!("Error getting process image name: {}", error_code));
             return Err("Failed to get qualified image name.");
         }
 
-        let len = buffer.iter().position(|&x| x == 0).unwrap_or(buffer.len());
-        buffer.truncate(len);
+        buffer.truncate_at_null();
 
-        let output = OsString::from_wide(&buffer);
+        let output = OsString::from_wide(buffer.as_slice());
         Ok(output)
     }
 
@@ -676,7 +671,7 @@ impl ProcessInfo
         };
 
         let mut return_length = 0;
-        unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, ptr::null_mut(), 0, &mut return_length, ); }
+        unsafe { GetTokenInformation(             safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, ptr::null_mut(), 0, &mut return_length, ); }
 
         if return_length == 0 {
             let error_code = unsafe { GetLastError() };
@@ -684,8 +679,8 @@ impl ProcessInfo
             return fail;
         }
 
-        let mut buffer: Vec<u8> = vec![0; return_length as usize];
-        let token_privileges: *mut TOKEN_PRIVILEGES = buffer.as_mut_ptr() as *mut TOKEN_PRIVILEGES;
+        let mut buffer = CleanBuffer::new(return_length as usize / 2);
+        let token_privileges = buffer.as_mut_ptr() as *mut TOKEN_PRIVILEGES;
 
         if unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, token_privileges as *mut _, return_length, &mut return_length, ) } == 0 {
             let error_code = unsafe { GetLastError() };

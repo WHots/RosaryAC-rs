@@ -10,13 +10,15 @@ use std::mem;
 use std::slice;
 use std::fmt;
 use std::ffi::c_void;
-use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::System::Diagnostics::Debug::{IMAGE_NT_HEADERS64, IMAGE_SECTION_HEADER};
+use windows_sys::Win32::Foundation::{BOOL, GetLastError, HANDLE};
+use windows_sys::Win32::System::Diagnostics::Debug::{IMAGE_NT_HEADERS64, IMAGE_SECTION_HEADER, ReadProcessMemory};
 use windows_sys::Win32::System::WindowsProgramming::IMAGE_THUNK_DATA64;
 use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQueryEx};
 use windows_sys::Win32::System::SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_IMPORT_DESCRIPTOR, IMAGE_NT_SIGNATURE};
+use crate::debug_log;
+use crate::memorymanage::CleanBuffer;
 
-use crate::memoryutils::memory_tools::read_memory;
+use crate::memoryutils::memory_tools::{read_mem_into_buf, read_memory};
 use crate::stringutils::{read_c_string, strings_match};
 
 
@@ -224,6 +226,8 @@ pub fn search_iat(process_handle: HANDLE, base: *const u8, search_name: &str) ->
                     }
                 },
                 Err(_) => {
+                    let error_code = unsafe { GetLastError() };
+                    debug_log!(format!("Error Reading C string: {}", error_code));
                     return Err(PEError::ReadMemoryFailed);
                 }
             }
@@ -298,7 +302,6 @@ pub unsafe fn display_section_info(section_name: &str, process_handle: HANDLE, b
 /// A `Result` containing a boolean indicating whether the PE is zeroed out, or a `PEError` otherwise.
 pub fn is_pe_zeroed(process_handle: HANDLE, base: *const u8) -> Result<bool, PEError>
 {
-
     let dos_header: IMAGE_DOS_HEADER = read_memory(process_handle, base).map_err(|_| PEError::ReadMemoryFailed)?;
 
     if dos_header.e_magic != IMAGE_DOS_SIGNATURE {
@@ -316,12 +319,18 @@ pub fn is_pe_zeroed(process_handle: HANDLE, base: *const u8) -> Result<bool, PEE
 
     for i in 0..nt_headers.FileHeader.NumberOfSections
     {
-        let section_header: IMAGE_SECTION_HEADER = read_memory(process_handle, unsafe { section_headers_address.add(i as usize * mem::size_of::<IMAGE_SECTION_HEADER>()) } as *const u8, ).map_err(|_| PEError::ReadMemoryFailed)?;
+        let section_header: IMAGE_SECTION_HEADER = read_memory(process_handle, unsafe {
+            section_headers_address.add(i as usize * mem::size_of::<IMAGE_SECTION_HEADER>())
+        } as *const u8).map_err(|_| PEError::ReadMemoryFailed)?;
 
         let section_data_address = unsafe { base.add(section_header.VirtualAddress as usize) };
-        let section_data: Vec<u8> = read_memory(process_handle, section_data_address).map_err(|_| PEError::ReadMemoryFailed)?;
+        let section_data_size = section_header.SizeOfRawData as usize;
 
-        if section_data.iter().all(|&byte| byte == 0) {
+        let mut section_data = CleanBuffer::new(section_data_size);
+
+        read_mem_into_buf(process_handle, section_data_address, section_data.as_mut_ptr(), section_data_size).map_err(|_| PEError::ReadMemoryFailed)?;
+
+        if section_data.as_slice().iter().all(|&byte| byte == 0) {
             return Ok(true);
         }
     }

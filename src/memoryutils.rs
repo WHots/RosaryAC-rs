@@ -19,6 +19,7 @@ use std::slice;
 pub mod memory_tools 
 {
     use windows_sys::Win32::System::Memory::{VirtualQueryEx, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READWRITE, MEM_MAPPED};
+    use crate::debug_log;
 
     use super::*;
 
@@ -129,17 +130,40 @@ pub mod memory_tools
 
         if success == 0 || bytes_read != mem::size_of::<T>() 
         {
-            let error_code = unsafe { GetLastError() };
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: {}", error_code);
-                println!("{}:{}", file!(), line!());
-            }
-
+            let error_code = unsafe {GetLastError()};
+            debug_log!(format!("Error: size was 0: {}", error_code));
             return Err(format!("Failed to read memory at address {:?}. Error code: {}", address, unsafe { GetLastError() } ));
         }
 
         Ok(unsafe { buffer.assume_init() })
+    }
+
+
+    /// Reads memory from a target process into a buffer.
+    ///
+    /// # Arguments
+    ///
+    /// * `process_handle` - A handle to the process to read memory from.
+    /// * `address` - The address in the target process to read memory from.
+    /// * `buffer` - A mutable pointer to the buffer where the read data will be stored.
+    /// * `size` - The number of bytes to read from the target process.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing `()` if successful, or an error string otherwise.
+    pub fn read_mem_into_buf(process_handle: HANDLE, address: *const u8, buffer: *mut u16, size: usize) -> Result<(), String>
+    {
+        let mut bytes_read = 0;
+
+        let success: BOOL = unsafe { ReadProcessMemory(process_handle, address as *const c_void, buffer as *mut c_void, size, &mut bytes_read, ) };
+
+        if success == 0 || bytes_read != size {
+            let error_code = unsafe {GetLastError()};
+            debug_log!(format!("Error: size was 0: {}", error_code));
+            return Err(format!("Failed to read memory at address {:?}. Error code: {}", address, unsafe { GetLastError() }));
+        }
+
+        Ok(())
     }
 
 

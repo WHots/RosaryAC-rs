@@ -20,7 +20,7 @@ use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
 use crate::debug_log;
 
-use crate::memorymanage::CleanHandle;
+use crate::memorymanage::{CleanBuffer, CleanHandle};
 use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION_EX, SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX};
 use crate::ntexapi_h::SystemInformationClass::{SystemExtendedHandleInformation};
 use crate::ntpsapi_h::NtQuerySystemInformation;
@@ -96,26 +96,23 @@ impl ProcessEnumerator
 
         let mut token_handle: HANDLE = 0;
 
-        if unsafe { OpenProcessToken(process_handle, TOKEN_ACCESS_TYPE, &mut token_handle) } == 0
-        {
+        if unsafe { OpenProcessToken(process_handle, TOKEN_ACCESS_TYPE, &mut token_handle) } == 0 {
             return None;
         }
 
-        let clean_token_handle = CleanHandle::new(token_handle);
+        let clean_token_handle = CleanHandle::new(token_handle)?;
 
-        let mut token_info: Vec<u8> = vec![0; 256];
+        let mut clean_buffer = CleanBuffer::new(256);
         let mut return_length: u32 = 0;
 
-        if unsafe {
-            GetTokenInformation(clean_token_handle?.as_raw(), TokenUser, token_info.as_mut_ptr() as *mut _, token_info.len() as u32, &mut return_length, ) } == 0 {
+        if unsafe { GetTokenInformation(clean_token_handle.as_raw(), TokenUser, clean_buffer.as_mut_ptr() as *mut _, clean_buffer.as_slice().len() as u32, &mut return_length, ) } == 0 {
             return None;
         }
 
-        let token_user: TOKEN_USER = unsafe { std::ptr::read(token_info.as_ptr() as *const TOKEN_USER) };
+        let token_user: TOKEN_USER = unsafe { std::ptr::read(clean_buffer.as_slice().as_ptr() as *const TOKEN_USER) };
         let mut sid_string: *mut u16 = null_mut();
 
-        if unsafe { ConvertSidToStringSidW(token_user.User.Sid, &mut sid_string) } == 0
-        {
+        if unsafe { ConvertSidToStringSidW(token_user.User.Sid, &mut sid_string) } == 0 {
             let error_code = unsafe { GetLastError() };
             debug_log!(format!("Error converting sid: {}", error_code));
             return None;

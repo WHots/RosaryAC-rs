@@ -26,7 +26,7 @@ enum DataLocation<T>
 
 /// A utility for managing a buffer of `u16` values.
 pub struct CleanBuffer {
-    buffer: Vec<u16>,
+    pub(crate) buffer: Vec<u16>,
 }
 
 
