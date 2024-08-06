@@ -10,6 +10,9 @@
 RosaryAC is a **proof of concept (PoC)** user-sided anti-cheat client designed to safeguard game processes. This project is currently experimental and under development. The codebase and the project's direction are subject to change at any time.
 
 **Project Change Log**
+- **Date:** 8/6/2024
+- **Update:** The project has transitioned to an EDR client.
+  
 - **Date:** 5/13/2024
 - **Update:** The project has transitioned to an anti-cheat client.
 
