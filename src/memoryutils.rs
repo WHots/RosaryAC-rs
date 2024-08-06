@@ -83,7 +83,6 @@ pub mod memory_tools
 
 
 
-
     /// Checks if an address is canonical on x64 systems.
     ///
     /// # Arguments

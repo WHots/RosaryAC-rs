@@ -61,13 +61,11 @@ pub struct ProcessData
     is_protected: Result<bool, ProcessDataError>,
     is_secure: Result<bool, ProcessDataError>,
     pub(crate) thread_count: HashMap<String, usize>,
-    pub(crate) handle_count: Result<i32, ProcessDataError>,
     pub(crate) token_privileges: i32,
     pub(crate) malicious_threads: Option<Vec<u32>>,
     pub(crate) has_malicious_threads: bool,
 }
 
-const FILE_HANDLE_TYPE: u8 = 28;
 
 const PRIVILEGE_TOKENS: &[&str] = &[
     "SeDebugPrivilege",
@@ -99,7 +97,6 @@ impl ProcessData {
             is_secure: Err(ProcessDataError::SecurityError("Not initialized".to_string())),
             is_elevated: Err(ProcessDataError::ElevationError("Not initialized".to_string())),
             thread_count: HashMap::new(),
-            handle_count: Err(ProcessDataError::HandleCountError("Not initialized".to_string())),
             token_privileges: 0,
             malicious_threads: None,
             has_malicious_threads: false,
@@ -108,6 +105,30 @@ impl ProcessData {
 
 
     /// Fills the `ProcessData` instance with data gathered from `ProcessInfo`.
+    ///
+    /// This method populates various fields of the `ProcessData` struct by querying
+    /// the provided `ProcessInfo` object. It gathers information such as image path,
+    /// debugging status, elevation status, PEB base address, WoW64 status, protection status,
+    /// security status, thread information, token privileges, and checks for injected threads.
+    ///
+    /// # Parameters
+    ///
+    /// - `process_info`: A reference to a `ProcessInfo` object containing the raw process data.
+    ///
+    /// # Errors
+    ///
+    /// While this method doesn't return a Result, it populates various fields with
+    /// `Result<T, ProcessDataError>` types. Errors during data gathering are converted
+    /// to appropriate `ProcessDataError` variants.
+    ///
+    /// # Side Effects
+    ///
+    /// - Updates all fields of the `ProcessData` instance.
+    /// - Prints an error message to stdout if scanning for injected threads fails.
+    ///
+    /// # Safety
+    ///
+    /// This method relies on `ProcessInfo` methods which may use unsafe Windows API calls.
     pub fn fill_process_data(&mut self, process_info: &ProcessInfo)
     {
         self.image_path = process_info.get_process_image_path_ex()
@@ -133,13 +154,7 @@ impl ProcessData {
         self.is_secure = process_info.is_secure_process()
             .map_err(|e| ProcessDataError::SecurityError(e.to_string()));
 
-        self.is_elevated = process_info.is_process_elevated()
-            .map_err(|e| ProcessDataError::ElevationError(e.to_string()));
-
         self.thread_count = process_info.query_thread_information();
-
-        self.handle_count = process_info.get_current_handle_count(self.pid, FILE_HANDLE_TYPE)
-            .map_err(|e| ProcessDataError::HandleCountError(e.to_string()));
 
         self.token_privileges = PRIVILEGE_TOKENS.iter().filter(|&&privilege| process_info.get_enabled_token_count(privilege) == 1).count() as i32;
 
@@ -153,5 +168,93 @@ impl ProcessData {
                 println!("Error occurred while scanning for injected threads.");
             }
         }
+    }
+
+
+    /// Calculates a base threat score for the process based on its characteristics.
+    ///
+    /// This method analyzes various attributes of the process, such as debugging status,
+    /// elevation, WoW64 status, protection status, presence of malicious threads,
+    /// token privileges, and thread characteristics to compute a threat score.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// - `f32`: The calculated threat score, ranging from 0.0 to 14.0.
+    /// - `Vec<u32>`: A list of process IDs of detected malicious threads.
+    ///
+    /// # Scoring Factors
+    ///
+    /// - Debugged process: +2.0
+    /// - Elevated process: +1.5
+    /// - WoW64 process: +0.5
+    /// - Protected process: -1.0
+    /// - Each malicious thread: +0.5
+    /// - Each token privilege: +1.25
+    /// - Each hidden thread: +2.5
+    /// - Each thread not owned by the process: +1.0
+    ///
+    /// The final score is clamped between 0.0 and 14.0.
+    ///
+    /// # Note
+    ///
+    /// This method does not modify the `ProcessData` instance and can be called multiple times
+    /// to recalculate the score based on the current state of the process data.
+    pub fn base_score_process(&self) -> (f32, Vec<u32>)
+    {
+
+        let mut threat_score: f32 = 0.0;
+        let mut malicious_thread_pids = Vec::new();
+
+        if let Ok(is_debugged) = self.is_debugged {
+            if is_debugged {
+                threat_score += 2.0;
+            }
+        }
+
+        if let Ok(is_elevated) = self.is_elevated {
+            if is_elevated {
+                threat_score += 1.5;
+            }
+        }
+
+        if let Ok(is_wow64) = self.is_wow64 {
+            if is_wow64 {
+                threat_score += 0.5;
+            }
+        }
+
+        if let Ok(is_protected) = self.is_protected {
+            if is_protected {
+                threat_score -= 1.0;
+            }
+        }
+
+        if let Some(malicious_threads) = &self.malicious_threads {
+            for _ in malicious_threads {
+                threat_score += 0.5;
+            }
+            malicious_thread_pids.extend(malicious_threads.iter().cloned());
+        }
+
+        for _ in 0..self.token_privileges {
+            threat_score += 1.25;
+        }
+
+        if let Some(hidden_thread_count) = self.thread_count.get("Hidden Flag") {
+            for _ in 0..*hidden_thread_count {
+                threat_score += 2.5;
+            }
+        }
+
+        if let Some(not_owned_count) = self.thread_count.get("NOT Owned") {
+            for _ in 0..*not_owned_count {
+                threat_score += 1.0;
+            }
+        }
+
+        threat_score = threat_score.min(14.0).max(0.0);
+
+        (threat_score, malicious_thread_pids)
     }
 }

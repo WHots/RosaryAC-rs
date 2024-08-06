@@ -257,7 +257,7 @@ pub unsafe fn display_section_info(section_name: &str, process_handle: HANDLE, b
     let mut memory_info: MEMORY_BASIC_INFORMATION = mem::zeroed();
     let mut base_address = base as usize;
 
-    while VirtualQueryEx(process_handle,base_address as _, &mut memory_info, mem::size_of::<MEMORY_BASIC_INFORMATION>(),) != 0 
+    while VirtualQueryEx(process_handle,base_address as _, &mut memory_info, mem::size_of::<MEMORY_BASIC_INFORMATION>(), ) != 0
     {
 
         let headers = (memory_info.BaseAddress as *const IMAGE_NT_HEADERS64).read_unaligned();

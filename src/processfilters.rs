@@ -137,6 +137,7 @@ impl ProcessEnumerator
         unsafe { EqualSid(sid1 as *mut _, sid2 as *mut _) != 0 }
     }
 
+
     /// Enumerates processes and fills the list of process IDs owned by the same user as the current process.
     ///
     /// # Returns
