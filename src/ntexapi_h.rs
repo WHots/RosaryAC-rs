@@ -284,10 +284,10 @@ pub struct SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX
 {
     pub(crate) Object: *mut c_void,
     pub(crate) UniqueProcessId: usize,
-    HandleValue: usize,
+    pub(crate) HandleValue: usize,
     GrantedAccess: c_ulong,
     CreatorBackTraceIndex: c_ushort,
-    ObjectTypeIndex: c_ushort,
+    pub(crate) ObjectTypeIndex: c_ushort,
     HandleAttributes: c_ulong,
     Reserved: c_ulong,
 }

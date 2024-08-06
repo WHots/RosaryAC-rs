@@ -63,6 +63,8 @@ pub struct ProcessData
     pub(crate) thread_count: HashMap<String, usize>,
     pub(crate) handle_count: Result<i32, ProcessDataError>,
     pub(crate) token_privileges: i32,
+    pub(crate) malicious_threads: Option<Vec<u32>>,
+    pub(crate) has_malicious_threads: bool,
 }
 
 const FILE_HANDLE_TYPE: u8 = 28;
@@ -99,6 +101,8 @@ impl ProcessData {
             thread_count: HashMap::new(),
             handle_count: Err(ProcessDataError::HandleCountError("Not initialized".to_string())),
             token_privileges: 0,
+            malicious_threads: None,
+            has_malicious_threads: false,
         }
     }
 
@@ -138,5 +142,16 @@ impl ProcessData {
             .map_err(|e| ProcessDataError::HandleCountError(e.to_string()));
 
         self.token_privileges = PRIVILEGE_TOKENS.iter().filter(|&&privilege| process_info.get_enabled_token_count(privilege) == 1).count() as i32;
+
+        match process_info.injected_thread() {
+
+            Ok((malicious_threads, has_malicious_threads)) => {
+                self.malicious_threads = Some(malicious_threads);
+                self.has_malicious_threads = has_malicious_threads;
+            }
+            Err(_) => {
+                println!("Error occurred while scanning for injected threads.");
+            }
+        }
     }
 }

@@ -74,4 +74,5 @@ fn main()
     println!("Token Privileges: {}", process_data.token_privileges);
 
     unsafe { CloseHandle(process_handle) };
+
 }

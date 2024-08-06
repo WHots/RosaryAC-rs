@@ -6,7 +6,7 @@
 
 
 
-use std::collections::{HashMap};
+use std::collections::{HashMap, HashSet};
 use std::ffi::{c_void, OsStr, OsString};
 use std::path::Path;
 use std::{mem, ptr};
@@ -574,6 +574,61 @@ impl ProcessInfo
         counts.insert("Hidden Flag".to_string(), hidden_thread_count);
 
         counts
+    }
+
+
+    /// Detects potential thread injection in the current process.
+    ///
+    /// Identifies threads associated with the current process but owned by different processes.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok((Vec<u32>, bool))`: Process IDs of potential injected thread owners and whether any were found.
+    /// - `Err(bool)`: `true` if an error occurred during detection.
+    ///
+    /// # Safety
+    ///
+    /// Uses unsafe Windows API calls for system thread enumeration and analysis.
+    pub fn injected_thread(&self) -> Result<(Vec<u32>, bool), bool>
+    {
+
+        let mut injected_thread_owners = HashSet::new();
+
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        let snapshot = CleanHandle::new(snapshot).ok_or(true)?;
+
+        let mut thread_entry_buffer = CleanBuffer::new(std::mem::size_of::<THREADENTRY32>() / std::mem::size_of::<u16>());
+        let thread_entry = unsafe { &mut *(thread_entry_buffer.as_mut_ptr() as *mut THREADENTRY32) };
+        thread_entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+
+        unsafe {
+            if Thread32First(snapshot.as_raw(), thread_entry) != 0 {
+                loop {
+                    if thread_entry.th32OwnerProcessID == self.pid {
+                        let thread_handle = OpenThread(0x0040, 0, thread_entry.th32ThreadID);
+
+                        if let Some(thread_handle) = CleanHandle::new(thread_handle) {
+                            let thread_owner_id = GetProcessIdOfThread(thread_handle.as_raw());
+
+                            if thread_owner_id != 0 && thread_owner_id != self.pid {
+                                injected_thread_owners.insert(thread_owner_id);
+                            }
+                        }
+                    }
+
+                    if Thread32Next(snapshot.as_raw(), thread_entry) == 0 {
+                        break;
+                    }
+                }
+            } else {
+                return Err(true);
+            }
+        }
+
+        let malicious_threads: Vec<u32> = injected_thread_owners.into_iter().collect();
+        let has_malicious_threads = !malicious_threads.is_empty();
+
+        Ok((malicious_threads, has_malicious_threads))
     }
 
 
