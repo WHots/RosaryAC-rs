@@ -1,45 +1,44 @@
-# RosaryAC - Proof of Concept Anti-Cheat Client (Work in Progress)
-
+# RosaryEDR - Proof of Concept User Mode EDR / Threat Detection System (Work in Progress)
 
 ![OIG777(1)(1)](https://github.com/WHots/RosaryAC-rs/assets/56490828/6ed65fd1-0b9b-46a0-b09e-72375eda1755)
 
-
 ## About The Project
 
-
-RosaryAC is a **proof of concept (PoC)** user-sided anti-cheat client designed to safeguard game processes. This project is currently experimental and under development. The codebase and the project's direction are subject to change at any time.
+RosaryEDR is a **proof of concept (PoC)** user mode Endpoint Detection and Response (EDR) / Threat Detection System designed to identify and report suspicious activities on endpoints. This project is currently experimental and under development. The codebase and the project's direction are subject to change at any time.
 
 **Project Change Log**
-- **Date:** 5/13/2024
-- **Update:** The project has transitioned to an anti-cheat client.
+- **Date:** 8/6/2024
+- **Update:** The project has transitioned to a user-mode EDR / Threat Detection System.
+- **Date:** ~~5/13/2024~~
+- **Update:** ~~The project has transitioned to an Anti-Cheat user client.~~
 
-This application is intended as a PoC for those interested in anti-cheat mechanisms. It is important to note that RosaryAC **does not provide resources for reversing cheats** or any malicious methods of gaining undetected access to game client processes. Additionally, it is not designed to target or single out any specific cheat provider.
+This application is intended as a PoC for those interested in endpoint security mechanisms. It is important to note that RosaryEDR **does not provide resources for executing or reversing malicious activities**. Additionally, it is not designed to target or single out any specific threat actor.
 
 ### Built With
 
-- **Rust Language:** The core of RosaryAC is built using Rust, known for its safety and performance.
+- **Rust Language:** The core of RosaryEDR is built using Rust, known for its safety and performance.
 
 ### Prerequisites
 
-To work with RosaryAC, you must have Rust and Cargo installed on your system. You can install them using rustup, which is available [here](https://rustup.rs/).
+To work with RosaryEDR, you must have Rust and Cargo installed on your system. You can install them using rustup, which is available [here](https://rustup.rs/).
 
-## Anti-Cheat Rules
+## EDR Rules
 
-To maintain fairness and integrity in gameplay, RosaryAC operates under the following rules:
+To maintain system security and integrity, RosaryEDR operates under the following rules:
 
 1. **Proof of Malicious Process:**
-   - The client **MUST** be able to prove that a malicious process is **running**. Merely having cheat software installed does **NOT** count. It must be proven that the cheat is running at the same time as the game.
-   - It also **MUST** be proven that the malicious process is or had interaction with the protected game process.
+   - The system **MUST** be able to prove that a malicious process is **running**. Merely having potentially harmful software installed does **NOT** count. It must be proven that the threat is active at the time of detection.
+   - It also **MUST** be proven that the malicious process is or had interaction with the protected system processes.
 
 2. **Memory and Process Interaction:**
-   - The client **is NOT** allowed to write into process memory nor interact with system processes during the user-mode stages of this project. This ensures the client operates safely and respects system integrity.
+   - The system **is NOT** allowed to write into process memory nor interact with system processes during the user-mode stages of this project. This ensures the system operates safely and respects system integrity.
 
 3. **Querying Machine Information:**
-   - The client **CAN** query machine information, but **ONLY** during runtime. None of the information queried should be personally identifiable to the user, maintaining user privacy and security.
+   - The system **CAN** query machine information, but **ONLY** during runtime. None of the information queried should be personally identifiable to the user, maintaining user privacy and security.
 
 4. **Network Connections:**
-   - The client **is NOT** permitted to create any type of third-party network connection whatsoever. It must not download or upload files, nor fetch any information. The client is designed to operate **100% offline**.
+   - The system **is NOT** permitted to create any type of third-party network connection whatsoever. It must not download or upload files, nor fetch any information. The system is designed to operate **100% offline**.
 
 ---
 
-**Note:** As this project is a work in progress, the information provided here is subject to change. Keep an eye on the repository for the latest updates. Your contributions and suggestions are welcome to improve RosaryAC. For any issues or feature requests, please refer to the [issues section](#) of the repository.
+**Note:** As this project is a work in progress, the information provided here is subject to change. Keep an eye on the repository for the latest updates. Your contributions and suggestions are welcome to improve RosaryEDR. For any issues or feature requests, please refer to the [issues section](#).
