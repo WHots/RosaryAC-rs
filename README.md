@@ -1,6 +1,6 @@
 # RosaryEDR - Proof of Concept User Mode EDR / Threat Detection System (Work in Progress)
 
-![OIG777(1)(1)](https://github.com/WHots/RosaryAC-rs/assets/56490828/6ed65fd1-0b9b-46a0-b09e-72375eda1755)
+![d6d6a16a-4623-4c71-8b85-520fc1cf37fe](https://github.com/user-attachments/assets/eb7d84bf-ecc4-430f-a090-49717ba9427c)
 
 ## About The Project
 
