@@ -12,7 +12,7 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::{
-    Foundation::{GetLastError, BOOL, HANDLE},
+    Foundation::{HANDLE},
     System::{
         Services::{
             OpenSCManagerW, QueryServiceStatus, SC_MANAGER_ENUMERATE_SERVICE,
@@ -33,6 +33,7 @@ pub mod player_one
 {
 
     use std::ptr::null;
+    use std::thread;
     use super::*;
 
     /// Defender real-time protection services.
@@ -168,5 +169,22 @@ pub mod player_one
         }
 
         cpuid_result.ecx & (1 << 31) != 0
+    }
+
+
+    /// Returns the optimal number of threads for concurrent operations on the current system.
+    ///
+    /// This function determines the number of logical processors available to the current
+    /// process, which is typically used as a sensible default for the number of threads
+    /// in a thread pool or for parallel computations.
+    ///
+    /// # Returns
+    ///
+    /// * `usize` - The number of logical processors available. This is usually equivalent
+    ///   to the number of CPU cores when hyper-threading is not in use, or twice the
+    ///   number of cores when hyper-threading is active.
+    pub fn get_optimal_thread_count() -> usize
+    {
+        thread::available_parallelism().map(|count| count.get()).unwrap_or(1)
     }
 }

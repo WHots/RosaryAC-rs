@@ -7,9 +7,12 @@
 
 
 use std::collections::HashMap;
-use std::fmt;
+use std::error::Error;
+use std::{fmt, thread};
+use std::sync::{Arc, Mutex};
 use serde::{Serialize, Deserialize};
 use crate::processutils::ProcessInfo;
+
 
 
 
@@ -64,6 +67,7 @@ pub struct ProcessData
     pub(crate) token_privileges: i32,
     pub(crate) malicious_threads: Option<Vec<u32>>,
     pub(crate) has_malicious_threads: bool,
+    pub(crate) is_32_bit: Result<bool, ProcessDataError>,
 }
 
 
@@ -100,6 +104,7 @@ impl ProcessData {
             token_privileges: 0,
             malicious_threads: None,
             has_malicious_threads: false,
+            is_32_bit: Err(ProcessDataError::SecurityError("Not initialized".to_string())),
         }
     }
 
@@ -159,7 +164,6 @@ impl ProcessData {
         self.token_privileges = PRIVILEGE_TOKENS.iter().filter(|&&privilege| process_info.get_enabled_token_count(privilege) == 1).count() as i32;
 
         match process_info.injected_thread() {
-
             Ok((malicious_threads, has_malicious_threads)) => {
                 self.malicious_threads = Some(malicious_threads);
                 self.has_malicious_threads = has_malicious_threads;
@@ -168,6 +172,9 @@ impl ProcessData {
                 println!("Error occurred while scanning for injected threads.");
             }
         }
+
+        self.is_32_bit = process_info.is_32_bit_process()
+            .map_err(|e| ProcessDataError::Wow64Error(e.to_string()));
     }
 
 
@@ -186,13 +193,14 @@ impl ProcessData {
     /// # Scoring Factors
     ///
     /// - Debugged process: +2.0
-    /// - Elevated process: +1.5
+    /// - Elevated process: +6.5
     /// - WoW64 process: +0.5
     /// - Protected process: -1.0
     /// - Each malicious thread: +0.5
     /// - Each token privilege: +1.25
     /// - Each hidden thread: +2.5
     /// - Each thread not owned by the process: +1.0
+    /// - Is process 32-bit: 3.25
     ///
     /// The final score is clamped between 0.0 and 14.0.
     ///
@@ -202,7 +210,6 @@ impl ProcessData {
     /// to recalculate the score based on the current state of the process data.
     pub fn base_score_process(&self) -> (f32, Vec<u32>)
     {
-
         let mut threat_score: f32 = 0.0;
         let mut malicious_thread_pids = Vec::new();
 
@@ -214,7 +221,7 @@ impl ProcessData {
 
         if let Ok(is_elevated) = self.is_elevated {
             if is_elevated {
-                threat_score += 1.5;
+                threat_score += 6.5;
             }
         }
 
@@ -253,7 +260,15 @@ impl ProcessData {
             }
         }
 
-        threat_score = threat_score.min(14.0).max(0.0);
+        if let Ok(is_32_bit) = self.is_32_bit
+        {
+            if is_32_bit
+            {
+                threat_score += 3.25;
+            }
+        }
+
+        threat_score = threat_score.min(14.0).max(1.0);
 
         (threat_score, malicious_thread_pids)
     }

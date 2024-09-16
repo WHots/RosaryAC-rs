@@ -14,7 +14,7 @@ use std::mem::size_of;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use windows_sys::Win32::Foundation::{BOOL, BOOLEAN, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID, NTSTATUS, STATUS_INFO_LENGTH_MISMATCH, STATUS_SUCCESS};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
-use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetProcessIdOfThread, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_ACCESS_RIGHTS, THREAD_QUERY_INFORMATION};
+use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetProcessIdOfThread, IsWow64Process, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_ACCESS_RIGHTS, THREAD_QUERY_INFORMATION};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 
@@ -58,7 +58,7 @@ impl PROCESS_EXTENDED_BASIC_INFORMATION
 
 pub struct ProcessInfo
 {
-    pid: u32,
+    pub(crate) pid: u32,
     process_handle: HANDLE,
 }
 
@@ -220,6 +220,113 @@ impl ProcessInfo
 
             module_name_in_path == module_name
         })
+    }
+
+
+    /// Determines if the process is a 32-bit process.
+    ///
+    /// This method checks if the process is running under the WOW64 subsystem, which indicates
+    /// that the process is a 32-bit process running on a 64-bit Windows system.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<bool, String>` - `true` if the process is a 32-bit process, `false` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the process handle is invalid or if the operation fails.
+    ///
+    /// # Safety
+    ///
+    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
+    pub fn is_32_bit_process(&self) -> Result<bool, String>
+    {
+        check_process_handle!(self.process_handle);
+
+        let mut is_wow64: i32 = 0;
+        let result = unsafe { IsWow64Process(self.process_handle, &mut is_wow64) };
+
+        if result == 0
+        {
+            let error_code = unsafe { GetLastError() };
+            debug_log!(format!("Error checking if process is 32-bit: {}", error_code));
+            return Err(format!("Failed to determine process architecture. Error code: {}", error_code));
+        }
+
+        Ok(is_wow64 != 0)
+    }
+
+
+    /// Retrieves a list of all privileges of the process.
+    ///
+    /// This method queries the process token for its privileges and returns them as a list of
+    /// human-readable privilege names.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<Vec<String>, String>` - A list of privilege names if successful, or an error message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the process handle is invalid, the process token cannot be opened,
+    /// or the token information cannot be retrieved.
+    ///
+    /// # Safety
+    ///
+    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
+    pub fn get_process_privileges(&self) -> Result<Vec<String>, String>
+    {
+
+        check_process_handle!(self.process_handle);
+
+        let mut token_handle: HANDLE = 0;
+
+        if unsafe { OpenProcessToken(self.process_handle, TOKEN_QUERY, &mut token_handle) } == 0
+        {
+            let error_code = unsafe { GetLastError() };
+            return Err(format!("Failed to open process token. Error code: {}", error_code));
+        }
+
+        let safe_handle = match CleanHandle::new(token_handle) {
+            Some(handle) => handle,
+            None => return Err("Failed to create a clean handle for the token.".to_string()),
+        };
+
+        let mut return_length = 0;
+        unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, ptr::null_mut(), 0, &mut return_length, ) };
+
+        if return_length == 0
+        {
+            let error_code = unsafe { GetLastError() };
+            return Err(format!("Failed to query token information size. Error code: {}", error_code));
+        }
+
+        let mut buffer = vec![0u8; return_length as usize];
+        let token_privileges = buffer.as_mut_ptr() as *mut TOKEN_PRIVILEGES;
+
+        if unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, token_privileges as *mut _, return_length, &mut return_length, ) } == 0
+        {
+            let error_code = unsafe { GetLastError() };
+            return Err(format!("Failed to query token information. Error code: {}", error_code));
+        }
+
+        let privileges = unsafe { std::slice::from_raw_parts((*token_privileges).Privileges.as_ptr(), (*token_privileges).PrivilegeCount as usize, ) };
+
+        let mut privilege_names = Vec::new();
+
+        for privilege in privileges
+        {
+            let mut name_buffer = [0u16; 256];
+            let mut name_size = name_buffer.len() as u32;
+
+            if unsafe { LookupPrivilegeNameW(ptr::null(), &privilege.Luid as *const LUID, name_buffer.as_mut_ptr(), &mut name_size, ) } != 0
+            {
+                let privilege_name = String::from_utf16_lossy(&name_buffer[..name_size as usize]);
+                privilege_names.push(privilege_name.trim_end_matches('\0').to_string());
+            }
+        }
+
+        Ok(privilege_names)
     }
 
 
