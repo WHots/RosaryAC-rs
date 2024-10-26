@@ -7,11 +7,9 @@
 
 
 use std::collections::HashMap;
-use std::error::Error;
-use std::{fmt, thread};
-use std::sync::{Arc, Mutex};
+use std::{fmt};
 use serde::{Serialize, Deserialize};
-use crate::processutils::ProcessInfo;
+use crate::processutils::{ ProcessInfo};
 
 
 
@@ -64,28 +62,11 @@ pub struct ProcessData
     is_protected: Result<bool, ProcessDataError>,
     is_secure: Result<bool, ProcessDataError>,
     pub(crate) thread_count: HashMap<String, usize>,
-    pub(crate) token_privileges: i32,
     pub(crate) malicious_threads: Option<Vec<u32>>,
     pub(crate) has_malicious_threads: bool,
     pub(crate) is_32_bit: Result<bool, ProcessDataError>,
 }
 
-
-const PRIVILEGE_TOKENS: &[&str] = &[
-    "SeDebugPrivilege",
-    "SeTcbPrivilege",
-    "SeShutdownPrivilege",
-    "SeLoadDriverPrivilege",
-    "SeTakeOwnershipPrivilege",
-    "SeBackupPrivilege",
-    "SeRestorePrivilege",
-    "SeRemoteShutdownPrivilege",
-    "SeSecurityPrivilege",
-    "SeSystemEnvironmentPrivilege",
-    "SeUndockPrivilege",
-    "SeAssignPrimaryTokenPrivilege",
-    "SeIncreaseQuotaPrivilege",
-];
 
 
 impl ProcessData {
@@ -101,7 +82,6 @@ impl ProcessData {
             is_secure: Err(ProcessDataError::SecurityError("Not initialized".to_string())),
             is_elevated: Err(ProcessDataError::ElevationError("Not initialized".to_string())),
             thread_count: HashMap::new(),
-            token_privileges: 0,
             malicious_threads: None,
             has_malicious_threads: false,
             is_32_bit: Err(ProcessDataError::SecurityError("Not initialized".to_string())),
@@ -161,7 +141,6 @@ impl ProcessData {
 
         self.thread_count = process_info.query_thread_information();
 
-        self.token_privileges = PRIVILEGE_TOKENS.iter().filter(|&&privilege| process_info.get_enabled_token_count(privilege) == 1).count() as i32;
 
         match process_info.injected_thread() {
             Ok((malicious_threads, has_malicious_threads)) => {
@@ -244,9 +223,11 @@ impl ProcessData {
             malicious_thread_pids.extend(malicious_threads.iter().cloned());
         }
 
+        /*
         for _ in 0..self.token_privileges {
             threat_score += 1.25;
         }
+        */
 
         if let Some(hidden_thread_count) = self.thread_count.get("Hidden Flag") {
             for _ in 0..*hidden_thread_count {

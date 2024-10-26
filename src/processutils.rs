@@ -14,7 +14,7 @@ use std::mem::size_of;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use windows_sys::Win32::Foundation::{BOOL, BOOLEAN, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID, NTSTATUS, STATUS_INFO_LENGTH_MISMATCH, STATUS_SUCCESS};
 use windows_sys::Win32::System::ProcessStatus::{EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL, MODULEINFO};
-use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetProcessIdOfThread, IsWow64Process, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_ACCESS_RIGHTS, THREAD_QUERY_INFORMATION};
+use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetProcessIdOfThread, GetProcessIoCounters, IO_COUNTERS, IsWow64Process, OpenProcessToken, OpenThread, PEB, PROCESS_BASIC_INFORMATION, THREAD_ACCESS_RIGHTS, THREAD_QUERY_INFORMATION};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD};
 use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 
@@ -30,17 +30,27 @@ use crate::winnt_h::{TOKEN_PRIVILEGES, TokenInformationClass};
 use crate::winnt_h::TokenInformationClass::TokenPrivileges;
 
 
-macro_rules! check_process_handle {
-    ($handle:expr) => {
-        if $handle == 0 {
-            println!("No process. Error code: {}", unsafe { GetLastError() });
-        }
-    };
-}
-
+pub const PRIVILEGE_TOKENS: &[&str] = &[
+    "SeDebugPrivilege",
+    "SeTcbPrivilege",
+    "SeShutdownPrivilege",
+    "SeLoadDriverPrivilege",
+    "SeTakeOwnershipPrivilege",
+    "SeBackupPrivilege",
+    "SeRestorePrivilege",
+    "SeRemoteShutdownPrivilege",
+    "SeSecurityPrivilege",
+    "SeSystemEnvironmentPrivilege",
+    "SeUndockPrivilege",
+    "SeAssignPrimaryTokenPrivilege",
+    "SeIncreaseQuotaPrivilege",
+];
 
 const TOKEN_ACCESS_TYPE: TOKEN_ACCESS_MASK = TOKEN_QUERY;
 const THREAD_ACCESS_TYPE: THREAD_ACCESS_RIGHTS = THREAD_QUERY_INFORMATION;
+
+
+
 
 impl PROCESS_EXTENDED_BASIC_INFORMATION
 {
@@ -193,8 +203,6 @@ impl ProcessInfo
     pub fn module_exists(&self, module_name: &OsStr) -> bool
     {
 
-        check_process_handle!(self.process_handle);
-
         const MAX_MODULES: usize = 1024;
         let mut h_modules = CleanBuffer::new(MAX_MODULES);
         let mut cb_needed: u32 = 0;
@@ -241,7 +249,6 @@ impl ProcessInfo
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
     pub fn is_32_bit_process(&self) -> Result<bool, String>
     {
-        check_process_handle!(self.process_handle);
 
         let mut is_wow64: i32 = 0;
         let result = unsafe { IsWow64Process(self.process_handle, &mut is_wow64) };
@@ -276,8 +283,6 @@ impl ProcessInfo
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
     pub fn get_process_privileges(&self) -> Result<Vec<String>, String>
     {
-
-        check_process_handle!(self.process_handle);
 
         let mut token_handle: HANDLE = 0;
 
@@ -341,7 +346,6 @@ impl ProcessInfo
     /// * `Result<(HMODULE, usize), String>` - The handle and size of the main module or an error.
     pub fn get_main_module_ex(&self) -> Result<(*const u8, usize), String>
     {
-        check_process_handle!(self.process_handle);
 
         let mut h_module: HMODULE = unsafe { std::mem::zeroed() };
         let mut cb_needed: u32 = 0;
@@ -391,8 +395,8 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<&'a OsStr, &'static str>` - A reference to the `OsStr` slice containing the file path of the main module, or an error if the operation fails.
-    pub fn get_process_image_path_ex(&self) -> Result<OsString, &'static str> {
-        check_process_handle!(self.process_handle);
+    pub fn get_process_image_path_ex(&self) -> Result<OsString, &'static str>
+    {
 
         const MAX_PATH: usize = 260;
         let mut buffer = CleanBuffer::new(MAX_PATH);
@@ -419,7 +423,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is being debugged, otherwise `false`.
     pub fn is_debugger(&self) -> Result<bool, String>
     {
-        check_process_handle!(self.process_handle);
 
         let mut debug_port: isize = 0;
         let mut return_length: u32 = 0;
@@ -447,7 +450,6 @@ impl ProcessInfo
     /// * `Result<*mut PEB, String>` - The base address of the PEB or an error.
     pub fn get_peb_base_address(&self) -> Result<*mut PEB, String>
     {
-        check_process_handle!(self.process_handle);
 
         let mut pbi: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         let mut return_length: u32 = 0;
@@ -475,7 +477,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is running under WOW64, `false` otherwise, or an error.
     pub fn is_wow64(&self) -> Result<bool, String>
     {
-        check_process_handle!(self.process_handle);
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = PROCESS_EXTENDED_BASIC_INFORMATION::new();
         pebi.Size = size_of::<PROCESS_EXTENDED_BASIC_INFORMATION>();
@@ -506,7 +507,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is protected, `false` otherwise, or an error.
     pub fn is_protected_process(&self) -> Result<bool, String>
     {
-        check_process_handle!(self.process_handle);
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         pebi.Size = std::mem::size_of::<PROCESS_EXTENDED_BASIC_INFORMATION>();
@@ -545,7 +545,6 @@ impl ProcessInfo
     /// * `Result<bool, String>` - `true` if the process is a secure process, `false` otherwise, or an error.
     pub fn is_secure_process(&self) -> Result<bool, String>
     {
-        check_process_handle!(self.process_handle);
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         pebi.Size = std::mem::size_of::<PROCESS_EXTENDED_BASIC_INFORMATION>();
@@ -576,7 +575,6 @@ impl ProcessInfo
     /// Returns `Ok(true)` if the process is elevated, or `Ok(false)` otherwise.
     pub fn is_process_elevated(&self) -> Result<bool, String>
     {
-        check_process_handle!(self.process_handle);
 
         let mut token_handle: HANDLE = 0;
 
@@ -602,7 +600,7 @@ impl ProcessInfo
         {
             let error_code = unsafe { GetLastError() };
             debug_log!(format!("Error checking if elevated process: {}", error_code));
-            return Err(format!("Token Information Was Zero: {}", error_code));
+            return Err(format!("Error checking if elevated process: {}", error_code));
         }
 
         Ok(elevation.TokenIsElevated != 0)
@@ -800,6 +798,7 @@ impl ProcessInfo
         Ok(count as i32)
     }
 
+    
     //// Checks if the current process has a specified privilege enabled.
     ///
     /// # Arguments
@@ -815,10 +814,7 @@ impl ProcessInfo
     pub fn get_enabled_token_count(&self, token_identifier: &str) -> i32
     {
 
-        check_process_handle!(self.process_handle);
-
         let fail = -1;
-
         let mut token_handle: HANDLE = INVALID_HANDLE_VALUE;
 
         if unsafe { OpenProcessToken(self.process_handle, TOKEN_ACCESS_TYPE, &mut token_handle) } == 0 {
@@ -833,7 +829,7 @@ impl ProcessInfo
         };
 
         let mut return_length = 0;
-        unsafe { GetTokenInformation(             safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, ptr::null_mut(), 0, &mut return_length, ); }
+        unsafe { GetTokenInformation( safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, ptr::null_mut(), 0, &mut return_length, ); }
 
         if return_length == 0 {
             let error_code = unsafe { GetLastError() };
@@ -841,7 +837,7 @@ impl ProcessInfo
             return fail;
         }
 
-        let mut buffer = CleanBuffer::new(return_length as usize / 2);
+        let mut buffer = CleanBuffer::new(return_length as usize);
         let token_privileges = buffer.as_mut_ptr() as *mut TOKEN_PRIVILEGES;
 
         if unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, token_privileges as *mut _, return_length, &mut return_length, ) } == 0 {
@@ -851,18 +847,45 @@ impl ProcessInfo
         }
 
         let privileges = unsafe {
-            std::slice::from_raw_parts(
-                (*token_privileges).Privileges.as_ptr(),
-                (*token_privileges).PrivilegeCount as usize
-            )
+            std::slice::from_raw_parts((*token_privileges).Privileges.as_ptr(), (*token_privileges).PrivilegeCount as usize)
         };
 
         for privilege in privileges {
-            if self.is_matching_privilege(&privilege, token_identifier) {
-                return if privilege.Attributes & SE_PRIVILEGE_ENABLED != 0 { 1 } else { 0 };
+            if self.is_matching_privilege(privilege, token_identifier) {
+                if privilege.Attributes & SE_PRIVILEGE_ENABLED != 0 {
+                    return 1;
+                }
             }
         }
 
-        fail
+        0
+    }
+
+
+    /// Retrieves the amount of data written to disk by the process associated with this handle.
+    ///
+    /// This method uses Windows API to query I/O statistics for the process, specifically focusing on
+    /// the amount of data written. It handles potential errors by returning them, allowing for
+    /// explicit error management by the caller.
+    ///
+    /// # Returns
+    /// - `Ok(f64)`: Contains the total amount of data written to disk in megabytes if successful.
+    /// - `Err(i32)`: An error code if the operation fails, where the `i32` represents the Windows error code.
+    pub fn get_process_write_amount(&self) -> Result<f64, i32>
+    {
+        let mut io_counters: IO_COUNTERS = unsafe { std::mem::zeroed() };
+
+        let handle = self.process_handle as HANDLE;
+
+        if unsafe { GetProcessIoCounters(handle, &mut io_counters) } == 0
+        {
+            let error_code = unsafe { GetLastError() };
+            debug_log!(format!("Failed getting IO Counter(s): {}", error_code));
+            return Err(error_code as i32);
+        }
+
+        let written_gb = io_counters.WriteTransferCount as f64 / (1024.0 * 1024.0);
+
+        Ok(written_gb)
     }
 }

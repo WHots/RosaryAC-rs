@@ -2,8 +2,8 @@ use std::ffi::OsStr;
 use std::{env, io};
 use std::io::Write;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
-use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ};
-use crate::fileutils::get_file_entropy;
+use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+use crate::fileutils::{get_file_entropy, get_file_sha256};
 use crate::processcore::ProcessData;
 
 mod processutils;
@@ -25,6 +25,9 @@ use crate::processutils::ProcessInfo;
 
 
 const PROCESS_FLAGS: u32 = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ;
+const BASE_CRIT_THREAT_SCORE: f64 = 2.0;
+const HIGH_ENTROPY: f64 = 6.7;
+
 
 
 struct ProcessThreatInfo
@@ -34,12 +37,14 @@ struct ProcessThreatInfo
     is_debugged: Option<bool>,
     is_elevated: Option<bool>,
     thread_count: Option<usize>,
-    token_privileges: String,
     threat_score: f64,
-    malicious_threads: Vec<u32>,
     file_entropy: Option<f64>,
+    file_sha256: Option<String>,
     is_32_bit: Option<bool>,
+    is_suspect: bool,
+    write_count: Result<f64,i32>
 }
+
 
 impl ProcessThreatInfo
 {
@@ -66,25 +71,33 @@ impl ProcessThreatInfo
         };
 
         let thread_count = process_data.thread_count.values().next().cloned();
-        let token_privileges = process_data.token_privileges.to_string();
         let (threat_score, malicious_threads) = process_data.base_score_process();
         let threat_score = threat_score.into();
 
-        let file_entropy = match &image_path
-        {
+        let (file_entropy, file_sha256) = match &image_path {
             Some(path) => {
                 let image_path_osstr = OsStr::new(path);
-                match get_file_entropy(image_path_osstr) {
-                    Ok(entropy) => Some(entropy),
-                    Err(_) => None,
-                }
+                let entropy = get_file_entropy(image_path_osstr).ok();
+                let sha256 = get_file_sha256(image_path_osstr).ok();
+                (entropy, sha256)
             }
-            None => None,
+            None => (None, None),
         };
 
         let is_32_bit = match &process_data.is_32_bit {
             Ok(status) => Some(*status),
             Err(_) => None,
+        };
+
+        let is_suspect = {
+            let high_threat = threat_score > BASE_CRIT_THREAT_SCORE;
+            let high_entropy = file_entropy.map_or(false, |entropy| entropy > HIGH_ENTROPY);
+            high_threat && high_entropy
+        };
+
+        let write_count = match process_info.get_process_write_amount() {
+            Ok(amount) => Ok(amount),
+            Err(e) => Err(e)
         };
 
         Self {
@@ -93,13 +106,15 @@ impl ProcessThreatInfo
             is_debugged,
             is_elevated,
             thread_count,
-            token_privileges,
             threat_score,
-            malicious_threads,
             file_entropy,
+            file_sha256,
             is_32_bit,
+            is_suspect,
+            write_count
         }
     }
+
 
     fn display(&self)
     {
@@ -126,23 +141,6 @@ impl ProcessThreatInfo
             None => println!("Thread Count: Not available"),
         }
 
-        println!("Token Privileges: {}", self.token_privileges);
-        println!("Threat Score: {:.2}", self.threat_score);
-
-        if !self.malicious_threads.is_empty()
-        {
-            println!("Malicious Threads Detected:");
-
-            for thread_id in &self.malicious_threads
-            {
-                println!("  - Thread ID: {}", thread_id);
-            }
-        }
-        else
-        {
-            println!("No malicious threads detected.");
-        }
-
         match self.is_32_bit {
             Some(is_32_bit) => println!("Is 32-bit Process: {}", is_32_bit),
             None => println!("Is 32-bit Process: Not available"),
@@ -152,6 +150,19 @@ impl ProcessThreatInfo
             Some(entropy) => println!("File Entropy: {:.6}", entropy),
             None => println!("File Entropy: Not available"),
         }
+
+        match &self.file_sha256 {
+            Some(hash) => println!("SHA256: {}", hash),
+            None => println!("SHA256: Not available"),
+        }
+
+        match self.write_count {
+            Ok(write_count) => println!("Write Amount: {}", write_count),
+            Err(_) => println!("Write Amount: Not available"), // Use _ or specify an error variable like Err(error)
+        }
+
+        println!("Threat Score: {:.2}", self.threat_score);
+        println!("Suspect Override: {}", self.is_suspect)
     }
 }
 
@@ -174,16 +185,17 @@ fn main()
         unsafe { GetCurrentProcessId() }
     };
 
-    let process_handle: HANDLE = unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) };
-
-    if process_handle == 0
-    {
-        let error_code = unsafe { GetLastError() };
-        eprintln!("Error getting handle: {}", error_code);
-        return;
-    }
+    let process_handle: HANDLE = match unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) } {
+        0 => {
+            let error_code = unsafe { GetLastError() };
+            debug_log!(format!("Process handle was empty: {}", error_code));
+            return;
+        },
+        handle => handle,
+    };
 
     let process_threat_info = ProcessThreatInfo::new(pid, process_handle);
+
     process_threat_info.display();
 
     let process_info = ProcessInfo::new(pid, process_handle);
