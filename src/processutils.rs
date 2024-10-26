@@ -798,7 +798,7 @@ impl ProcessInfo
         Ok(count as i32)
     }
 
-    
+
     //// Checks if the current process has a specified privilege enabled.
     ///
     /// # Arguments
