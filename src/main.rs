@@ -1,10 +1,13 @@
 use std::ffi::OsStr;
 use std::{env, io};
 use std::io::Write;
+use serde::Serialize;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 use crate::fileutils::{get_file_entropy, get_file_sha256};
+use crate::peutils::IATResult;
 use crate::processcore::ProcessData;
+
 
 mod processutils;
 mod memoryutils;
@@ -19,6 +22,7 @@ mod ntexapi_h;
 mod ntobapi_h;
 mod processcore;
 mod debugutils;
+mod peutils;
 
 use crate::processutils::ProcessInfo;
 
@@ -30,6 +34,7 @@ const HIGH_ENTROPY: f64 = 6.7;
 
 
 
+#[derive(Serialize)]
 struct ProcessThreatInfo
 {
     pid: u32,
@@ -37,17 +42,73 @@ struct ProcessThreatInfo
     is_debugged: Option<bool>,
     is_elevated: Option<bool>,
     thread_count: Option<usize>,
-    threat_score: f64,
     file_entropy: Option<f64>,
     file_sha256: Option<String>,
     is_32_bit: Option<bool>,
-    is_suspect: bool,
-    write_count: Result<f64,i32>
+    write_count: f64,
+    suspicious_imports: Vec<String>,
+    privileges: Vec<String>,
+    threat_score: f64,
+    is_suspect_anyways: bool
 }
 
 
 impl ProcessThreatInfo
 {
+
+    pub fn process_bad_imports(pid: u32, process_handle: HANDLE) -> Vec<(String, bool)>
+    {
+        let suspicious_apis = [
+            "VirtualAllocEx",
+            "WriteProcessMemory",
+            "CreateRemoteThread",
+            "NtMapViewOfSection",
+            "LoadLibraryA",
+            "GetProcAddress",
+            "SetWindowsHookEx",
+            "ReadProcessMemory",
+            "CreateProcess",
+            "VirtualProtect",
+            "NtCreateThreadEx",
+            "RtlCreateUserThread",
+            "QueueUserAPC",
+            "SetThreadContext",
+            "ResumeThread"
+        ];
+
+        let process_info = ProcessInfo::new(pid, process_handle);
+        let mut results = Vec::new();
+
+        if let Ok((base_address, _)) = process_info.get_main_module_ex()
+        {
+            for api in suspicious_apis.iter()
+            {
+                match peutils::search_iat(process_handle, base_address, api)
+                {
+                    Ok(IATResult::Found) => {
+                        results.push((api.to_string(), true));
+                    }
+                    Ok(IATResult::NotFound) => {
+                        results.push((api.to_string(), false));
+                    }
+                    Ok(IATResult::FailedExecution) => {
+                        debug_log!(format!("Failed to check for API: {}", api));
+                    }
+                    Err(e) => {
+                        debug_log!(format!("Error checking API {}: {}", api, e));
+                    }
+                }
+            }
+        }
+        else
+        {
+            debug_log!("Failed to get main module address");
+        }
+
+        results
+    }
+
+
     fn new(pid: u32, process_handle: HANDLE) -> Self
     {
         let process_info = ProcessInfo::new(pid, process_handle);
@@ -74,6 +135,7 @@ impl ProcessThreatInfo
         let (threat_score, malicious_threads) = process_data.base_score_process();
         let threat_score = threat_score.into();
 
+
         let (file_entropy, file_sha256) = match &image_path {
             Some(path) => {
                 let image_path_osstr = OsStr::new(path);
@@ -89,15 +151,27 @@ impl ProcessThreatInfo
             Err(_) => None,
         };
 
-        let is_suspect = {
+        let is_suspect_anyways = {
             let high_threat = threat_score > BASE_CRIT_THREAT_SCORE;
             let high_entropy = file_entropy.map_or(false, |entropy| entropy > HIGH_ENTROPY);
             high_threat && high_entropy
         };
 
         let write_count = match process_info.get_process_write_amount() {
-            Ok(amount) => Ok(amount),
-            Err(e) => Err(e)
+            Ok(amount) => amount,
+            Err(_) => 0.0
+        };
+
+
+        let suspicious_imports = Self::process_bad_imports(pid, process_handle)
+            .into_iter()
+            .filter(|(_, found)| *found)
+            .map(|(api, _)| api)
+            .collect();
+
+        let privileges = match process_info.get_process_privileges() {
+            Ok(privs) => privs,
+            Err(_) => Vec::new(),
         };
 
         Self {
@@ -110,8 +184,10 @@ impl ProcessThreatInfo
             file_entropy,
             file_sha256,
             is_32_bit,
-            is_suspect,
-            write_count
+            is_suspect_anyways,
+            write_count,
+            suspicious_imports,
+            privileges
         }
     }
 
@@ -119,6 +195,7 @@ impl ProcessThreatInfo
     fn display(&self)
     {
 
+        /*
         println!("Process ID: {}", self.pid);
 
         match &self.image_path {
@@ -158,13 +235,22 @@ impl ProcessThreatInfo
 
         match self.write_count {
             Ok(write_count) => println!("Write Amount: {}", write_count),
-            Err(_) => println!("Write Amount: Not available"), // Use _ or specify an error variable like Err(error)
+            Err(_) => println!("Write Amount: Not available"),
         }
 
-        println!("Threat Score: {:.2}", self.threat_score);
-        println!("Suspect Override: {}", self.is_suspect)
+
+        println!("\n\nThreat Score: {:.2}", self.threat_score);
+        println!("Suspect Override: {}", self.is_suspect);
+
+         */
+
+        match serde_json::to_string_pretty(self) {
+            Ok(json_output) => println!("{}", json_output),
+            Err(e) => println!("Error serializing to JSON: {}", e),
+        }
     }
 }
+
 
 fn main()
 {
@@ -197,19 +283,6 @@ fn main()
     let process_threat_info = ProcessThreatInfo::new(pid, process_handle);
 
     process_threat_info.display();
-
-    let process_info = ProcessInfo::new(pid, process_handle);
-
-    match process_info.get_process_privileges()
-    {
-        Ok(privileges) => {
-            println!("Process Privileges:");
-            for privilege in privileges {
-                println!("  - {}", privilege);
-            }
-        }
-        Err(e) => println!("Error retrieving privileges: {}", e),
-    }
 
     unsafe { CloseHandle(process_handle) };
 
