@@ -9,7 +9,8 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_void, OsStr, OsString};
 use std::path::Path;
-use std::{mem, ptr};
+use std::{fmt, mem, ptr};
+use std::fmt::{Display, Formatter};
 use std::mem::size_of;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use windows_sys::Win32::Foundation::{BOOL, BOOLEAN, GetLastError, HANDLE, HMODULE, INVALID_HANDLE_VALUE, LUID, NTSTATUS, STATUS_INFO_LENGTH_MISMATCH, STATUS_SUCCESS};
@@ -28,6 +29,72 @@ use crate::ntexapi_h::SystemInformationClass::SystemHandleInformation;
 use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInformationThread, NtQueryInformationToken, NtQuerySystemInformation, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
 use crate::winnt_h::{TOKEN_PRIVILEGES, TokenInformationClass};
 use crate::winnt_h::TokenInformationClass::TokenPrivileges;
+
+
+
+
+
+pub enum ProcessError
+{
+    /// Failed to open a handle to the process.
+    OpenProcessFailed,
+    /// Failed to enumerate or get information about process modules.
+    ModuleOperationFailed,
+    /// The module's base address was null.
+    NullModuleAddress,
+    /// Failed to get the process image path.
+    ImagePathFailed,
+    /// Failed to open or query the process token.
+    TokenOperationFailed,
+    /// Failed to query the debug port.
+    DebugPortQueryFailed,
+    /// Failed to query process information.
+    ProcessInfoQueryFailed,
+    /// Failed to check process elevation status.
+    ElevationCheckFailed,
+    /// Failed to get the PEB base address.
+    PebAddressFailed,
+    /// Failed to determine process architecture.
+    ArchitectureCheckFailed,
+    /// Failed to get IO counters.
+    IoCountersFailed,
+    /// Failed to enumerate or get information about threads.
+    ThreadOperationFailed,
+    /// Failed to get handle count information.
+    HandleCountFailed,
+    /// Creating a clean / safe handle to the process failed.
+    CleanHandleFailed,
+    /// Other errors represented by an integer code.
+    Other(i32),
+}
+
+impl Display for ProcessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessError::OpenProcessFailed => write!(f, "Failed to open process"),
+            ProcessError::ModuleOperationFailed => write!(f, "Failed to perform module operation"),
+            ProcessError::NullModuleAddress => write!(f, "Module base address is null"),
+            ProcessError::ImagePathFailed => write!(f, "Failed to get process image path"),
+            ProcessError::TokenOperationFailed => write!(f, "Failed to perform token operation"),
+            ProcessError::DebugPortQueryFailed => write!(f, "Failed to query debug port"),
+            ProcessError::ProcessInfoQueryFailed => write!(f, "Failed to query process information"),
+            ProcessError::ElevationCheckFailed => write!(f, "Failed to check process elevation"),
+            ProcessError::PebAddressFailed => write!(f, "Failed to get PEB address"),
+            ProcessError::ArchitectureCheckFailed => write!(f, "Failed to check process architecture"),
+            ProcessError::IoCountersFailed => write!(f, "Failed to get IO counters"),
+            ProcessError::ThreadOperationFailed => write!(f, "Failed to perform thread operation"),
+            ProcessError::HandleCountFailed => write!(f, "Failed to get handle count"),
+            ProcessError::CleanHandleFailed => write!(f, "Failed to create a clean / safe handle to process."),
+            ProcessError::Other(code) => write!(f, "Unknown error: {}", code),
+        }
+    }
+}
+
+impl From<i32> for ProcessError {
+    fn from(error_code: i32) -> Self {
+        ProcessError::Other(error_code)
+    }
+}
 
 
 pub const PRIVILEGE_TOKENS: &[&str] = &[
@@ -247,7 +314,7 @@ impl ProcessInfo
     /// # Safety
     ///
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
-    pub fn is_32_bit_process(&self) -> Result<bool, String>
+    pub fn is_32_bit_process(&self) -> Result<bool, ProcessError>
     {
 
         let mut is_wow64: i32 = 0;
@@ -255,9 +322,8 @@ impl ProcessInfo
 
         if result == 0
         {
-            let error_code = unsafe { GetLastError() };
-            debug_log!(format!("Error checking if process is 32-bit: {}", error_code));
-            return Err(format!("Failed to determine process architecture. Error code: {}", error_code));
+            debug_log!(format!("Error checking if process is 32-bit: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::ArchitectureCheckFailed)
         }
 
         Ok(is_wow64 != 0)
@@ -281,20 +347,20 @@ impl ProcessInfo
     /// # Safety
     ///
     /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
-    pub fn get_process_privileges(&self) -> Result<Vec<String>, String>
+    pub fn get_process_privileges(&self) -> Result<Vec<String>, ProcessError>
     {
 
         let mut token_handle: HANDLE = 0;
 
         if unsafe { OpenProcessToken(self.process_handle, TOKEN_QUERY, &mut token_handle) } == 0
         {
-            let error_code = unsafe { GetLastError() };
-            return Err(format!("Failed to open process token. Error code: {}", error_code));
+            debug_log!(format!("Error opening process token: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::TokenOperationFailed)
         }
 
         let safe_handle = match CleanHandle::new(token_handle) {
             Some(handle) => handle,
-            None => return Err("Failed to create a clean handle for the token.".to_string()),
+            None => return Err(ProcessError::CleanHandleFailed),
         };
 
         let mut return_length = 0;
@@ -303,7 +369,8 @@ impl ProcessInfo
         if return_length == 0
         {
             let error_code = unsafe { GetLastError() };
-            return Err(format!("Failed to query token information size. Error code: {}", error_code));
+            debug_log!(format!("Error getting token information: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::TokenOperationFailed);
         }
 
         let mut buffer = vec![0u8; return_length as usize];
@@ -311,8 +378,8 @@ impl ProcessInfo
 
         if unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, token_privileges as *mut _, return_length, &mut return_length, ) } == 0
         {
-            let error_code = unsafe { GetLastError() };
-            return Err(format!("Failed to query token information. Error code: {}", error_code));
+            debug_log!(format!("Error getting token information: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::TokenOperationFailed);
         }
 
         let privileges = unsafe { std::slice::from_raw_parts((*token_privileges).Privileges.as_ptr(), (*token_privileges).PrivilegeCount as usize, ) };
@@ -344,34 +411,29 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<(HMODULE, usize), String>` - The handle and size of the main module or an error.
-    pub fn get_main_module_ex(&self) -> Result<(*const u8, usize), String>
+    pub fn get_main_module_ex(&self) -> Result<(*const u8, usize), ProcessError>
     {
 
         let mut h_module: HMODULE = unsafe { std::mem::zeroed() };
         let mut cb_needed: u32 = 0;
 
         if unsafe { EnumProcessModulesEx(self.process_handle, &mut h_module, std::mem::size_of_val(&h_module) as u32, &mut cb_needed, LIST_MODULES_ALL) == 0 } {
-            let error_code = unsafe { GetLastError() };
-
-            #[cfg(debug_assertions)]
-            {
-                println!("Error: {}", error_code);
-                println!("{}:{}", file!(), line!());
-            }
-
-            return Err(format!("Failed to enumerate process modules. Error code: {}", unsafe { GetLastError() }));
+            debug_log!(format!("Error enum process modules: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::ModuleOperationFailed);
         }
 
         let mut module_info: MODULEINFO = unsafe { std::mem::zeroed() };
 
         if unsafe { GetModuleInformation(self.process_handle, h_module, &mut module_info, std::mem::size_of::<MODULEINFO>() as u32) == 0 } {
-            return Err(format!("Failed to get module information. Error code: {}", unsafe { GetLastError() }));
+            debug_log!(format!("Error getting module information: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::ModuleOperationFailed);
         }
 
         let base_address: *const u8 = module_info.lpBaseOfDll as *const u8;
 
         if base_address.is_null() {
-            return Err("Module base address is null.".to_string());
+            debug_log!(format!("The module base address was null: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::NullModuleAddress);
         }
 
         Ok((base_address, module_info.SizeOfImage as usize))
@@ -395,7 +457,7 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<&'a OsStr, &'static str>` - A reference to the `OsStr` slice containing the file path of the main module, or an error if the operation fails.
-    pub fn get_process_image_path_ex(&self) -> Result<OsString, &'static str>
+    pub fn get_process_image_path_ex(&self) -> Result<OsString, ProcessError>
     {
 
         const MAX_PATH: usize = 260;
@@ -404,9 +466,8 @@ impl ProcessInfo
         let result = unsafe { GetModuleFileNameExW(self.process_handle, 0, buffer.as_mut_ptr(), buffer.buffer.len() as u32, ) };
 
         if result == 0 {
-            let error_code = unsafe { GetLastError() };
-            debug_log!(format!("Error getting process image name: {}", error_code));
-            return Err("Failed to get qualified image name.");
+            debug_log!(format!("Error getting process image name: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::ImagePathFailed);
         }
 
         buffer.truncate_at_null();
@@ -421,7 +482,7 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<bool, String>` - `true` if the process is being debugged, otherwise `false`.
-    pub fn is_debugger(&self) -> Result<bool, String>
+    pub fn is_debugger(&self) -> Result<bool, ProcessError>
     {
 
         let mut debug_port: isize = 0;
@@ -431,8 +492,8 @@ impl ProcessInfo
 
         if status != 0
         {
-            debug_log!(format!("Error checking for debugger flag: {}", status));
-            return Err(format!("Failed to query debug port. NTSTATUS: {}", status));
+            debug_log!(format!("Error checking for debug flag in process info query: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::ProcessInfoQueryFailed);
         }
 
         Ok(debug_port != 0)
@@ -448,7 +509,7 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<*mut PEB, String>` - The base address of the PEB or an error.
-    pub fn get_peb_base_address(&self) -> Result<*mut PEB, String>
+    pub fn get_peb_base_address(&self) -> Result<*mut PEB, ProcessError>
     {
 
         let mut pbi: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
@@ -458,8 +519,8 @@ impl ProcessInfo
 
         if status != 0
         {
-            debug_log!(format!("Error getting peb base address: {}", status));
-            return Err(format!("Failed to query process information. NTSTATUS: {}", status));
+            debug_log!(format!("Error getting PEB address: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::PebAddressFailed);
         }
 
         Ok(pbi.PebBaseAddress)
@@ -475,7 +536,7 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<bool, String>` - `true` if the process is running under WOW64, `false` otherwise, or an error.
-    pub fn is_wow64(&self) -> Result<bool, String>
+    pub fn is_wow64(&self) -> Result<bool, ProcessError>
     {
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = PROCESS_EXTENDED_BASIC_INFORMATION::new();
@@ -487,8 +548,8 @@ impl ProcessInfo
 
         if status != 0
         {
-            debug_log!(format!("Error checking if WoW64 imm: {}", status));
-            return Err(format!("Failed to query process information. NTSTATUS: {}", status));
+            debug_log!(format!("Error checking if WoW64 Emulation: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::ProcessInfoQueryFailed);
         }
 
         const FLAG_IS_WOW64_PROCESS: u32 = 0x00000002;
@@ -505,7 +566,7 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<bool, String>` - `true` if the process is protected, `false` otherwise, or an error.
-    pub fn is_protected_process(&self) -> Result<bool, String>
+    pub fn is_protected_process(&self) -> Result<bool, ProcessError>
     {
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
@@ -525,8 +586,8 @@ impl ProcessInfo
 
         if status != 0
         {
-            debug_log!(format!("Error checking if protected process: {}", status));
-            return Err(format!("Failed to query process information. NTSTATUS: {}", status));
+            debug_log!(format!("Error checking if process is protected: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::ProcessInfoQueryFailed);
         }
 
         const FLAG_IS_PROTECTED_PROCESS: u32 = 0x00000001;
@@ -543,7 +604,7 @@ impl ProcessInfo
     /// # Returns
     ///
     /// * `Result<bool, String>` - `true` if the process is a secure process, `false` otherwise, or an error.
-    pub fn is_secure_process(&self) -> Result<bool, String>
+    pub fn is_secure_process(&self) -> Result<bool, ProcessError>
     {
 
         let mut pebi: PROCESS_EXTENDED_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
@@ -555,8 +616,8 @@ impl ProcessInfo
 
         if status != 0
         {
-            debug_log!(format!("Error checking if secure process: {}", status));
-            return Err(format!("Failed to query process information. NTSTATUS: {}", status));
+            debug_log!(format!("Error checking if process is secured: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::ProcessInfoQueryFailed);
         }
 
         const FLAG_IS_SECURE_PROCESS: u32 = 0x00000080;
@@ -573,7 +634,7 @@ impl ProcessInfo
     /// # Returns
     ///
     /// Returns `Ok(true)` if the process is elevated, or `Ok(false)` otherwise.
-    pub fn is_process_elevated(&self) -> Result<bool, String>
+    pub fn is_process_elevated(&self) -> Result<bool, ProcessError>
     {
 
         let mut token_handle: HANDLE = 0;
@@ -581,9 +642,8 @@ impl ProcessInfo
         let token_opened: BOOL = unsafe { OpenProcessToken(self.process_handle, TOKEN_ACCESS_TYPE, &mut token_handle, ) };
 
         if token_opened == 0 {
-            let error_code = unsafe { GetLastError() };
-            debug_log!(format!("Error checking if elevated process: {}", error_code));
-            return Err(format!("No Process Token Opened: {}", error_code));
+            debug_log!(format!("Error checking if process is elevated: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::TokenOperationFailed);
         }
 
         let safe_handle = match CleanHandle::new(token_handle) {
@@ -598,9 +658,8 @@ impl ProcessInfo
 
         if token_info == 0
         {
-            let error_code = unsafe { GetLastError() };
-            debug_log!(format!("Error checking if elevated process: {}", error_code));
-            return Err(format!("Error checking if elevated process: {}", error_code));
+            debug_log!(format!("Error checking if process is elevated: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::TokenOperationFailed);
         }
 
         Ok(elevation.TokenIsElevated != 0)
@@ -765,8 +824,7 @@ impl ProcessInfo
 
         if status != STATUS_INFO_LENGTH_MISMATCH
         {
-            let error_code = unsafe { GetLastError() };
-            debug_log!(format!("Error getting handle count: {}", error_code));
+            debug_log!(format!("Error getting system handle count: {}", unsafe { GetLastError() }));
             return Err(status);
         }
 
@@ -841,8 +899,7 @@ impl ProcessInfo
         let token_privileges = buffer.as_mut_ptr() as *mut TOKEN_PRIVILEGES;
 
         if unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, token_privileges as *mut _, return_length, &mut return_length, ) } == 0 {
-            let error_code = unsafe { GetLastError() };
-            debug_log!(format!("Error querying token information: {}", error_code));
+            debug_log!(format!("Error checking if tokens are enabled: {}", unsafe { GetLastError() }));
             return fail;
         }
 
@@ -871,7 +928,7 @@ impl ProcessInfo
     /// # Returns
     /// - `Ok(f64)`: Contains the total amount of data written to disk in megabytes if successful.
     /// - `Err(i32)`: An error code if the operation fails, where the `i32` represents the Windows error code.
-    pub fn get_process_write_amount(&self) -> Result<f64, i32>
+    pub fn get_process_write_amount(&self) -> Result<f64, ProcessError>
     {
         let mut io_counters: IO_COUNTERS = unsafe { std::mem::zeroed() };
 
@@ -879,9 +936,8 @@ impl ProcessInfo
 
         if unsafe { GetProcessIoCounters(handle, &mut io_counters) } == 0
         {
-            let error_code = unsafe { GetLastError() };
-            debug_log!(format!("Failed getting IO Counter(s): {}", error_code));
-            return Err(error_code as i32);
+            debug_log!(format!("Error checking IO counters for process: {}", unsafe { GetLastError() }));
+            return Err(ProcessError::ProcessInfoQueryFailed);
         }
 
         let written_gb = io_counters.WriteTransferCount as f64 / (1024.0 * 1024.0);

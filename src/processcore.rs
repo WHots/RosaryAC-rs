@@ -7,7 +7,7 @@
 
 
 use std::collections::HashMap;
-use std::{fmt};
+use std::{fmt::{Display, Formatter}, fmt};
 use serde::{Serialize, Deserialize};
 use crate::processutils::{ ProcessInfo};
 
@@ -30,8 +30,8 @@ pub enum ProcessDataError
 }
 
 
-impl fmt::Display for ProcessDataError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for ProcessDataError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             ProcessDataError::ImagePathError(msg) => write!(f, "Failed Fetching Image Path: {}", msg),
             ProcessDataError::DebuggerError(msg) => write!(f, "Debugger Check Error: {}", msg),
@@ -148,7 +148,7 @@ impl ProcessData {
                 self.has_malicious_threads = has_malicious_threads;
             }
             Err(_) => {
-                println!("Error occurred while scanning for injected threads.");
+                println!("Error occurred while scanning for injected threads.");    //  no no no
             }
         }
 
@@ -222,12 +222,6 @@ impl ProcessData {
             }
             malicious_thread_pids.extend(malicious_threads.iter().cloned());
         }
-
-        /*
-        for _ in 0..self.token_privileges {
-            threat_score += 1.25;
-        }
-        */
 
         if let Some(hidden_thread_count) = self.thread_count.get("Hidden Flag") {
             for _ in 0..*hidden_thread_count {

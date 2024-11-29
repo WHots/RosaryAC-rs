@@ -9,7 +9,6 @@
 use std::{ffi::{c_void}, mem::{self, MaybeUninit}};
 use windows_sys::Win32::Foundation::{BOOL, HANDLE, GetLastError};
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-
 use std::slice;
 
 
@@ -72,31 +71,27 @@ pub mod memory_tools
     }
 
 
-
-    /// Enum for breakpoint opcodes.
-    #[repr(u8)]
-    pub enum BreakpointOpcode 
+    #[derive(Debug)]
+    pub enum ScanError
     {
-        Int3 = 0xCC, // Int3
-        Int1 = 0xF1, // ICE
+        InvalidAddress,
+        EmptyPattern,
+        InvalidSize,
+        ReadFailed(String),
     }
 
-
-
-    /// Checks if an address is canonical on x64 systems.
-    ///
-    /// # Arguments
-    ///
-    /// * `address` - The address to check.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the address is canonical, otherwise `false`.
-    #[inline]
-    fn is_canonical(address: u64) -> bool
+    impl std::fmt::Display for ScanError
     {
-        let upper_bits = address >> 47;
-        upper_bits == 0 || upper_bits == (1 << 17) - 1
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+        {
+            match self
+            {
+                ScanError::InvalidAddress => write!(f, "Start address cannot be null"),
+                ScanError::EmptyPattern => write!(f, "Search pattern cannot be empty"),
+                ScanError::InvalidSize => write!(f, "Chunk size cannot be 0"),
+                ScanError::ReadFailed(e) => write!(f, "Failed to read process memory: {}", e),
+            }
+        }
     }
 
 
@@ -111,7 +106,7 @@ pub mod memory_tools
     /// # Returns
     ///
     /// A `Result` containing the value read from memory if successful, or an error string otherwise.
-    pub fn read_memory<T: Sized>(process_handle: HANDLE, address: *const u8) -> Result<T, String> 
+    pub fn read_memory<T: Sized>(process_handle: HANDLE, address: *const u8) -> Result<T, String>
     {
 
         let mut buffer = MaybeUninit::<T>::uninit();
@@ -127,15 +122,13 @@ pub mod memory_tools
             )
         };
 
-        if success == 0 || bytes_read != mem::size_of::<T>() 
-        {
-            let error_code = unsafe {GetLastError()};
-            debug_log!(format!("Error: size was 0: {}", error_code));
-            return Err(format!("Failed to read memory at address {:?}. Error code: {}", address, unsafe { GetLastError() } ));
+        if success == 0 || bytes_read != mem::size_of::<T>() {
+            return Err(format!("Failed to read memory at address {:?}", address));
         }
 
         Ok(unsafe { buffer.assume_init() })
     }
+
 
 
     /// Reads memory from a target process into a buffer.
@@ -157,8 +150,7 @@ pub mod memory_tools
         let success: BOOL = unsafe { ReadProcessMemory(process_handle, address as *const c_void, buffer as *mut c_void, size, &mut bytes_read, ) };
 
         if success == 0 || bytes_read != size {
-            let error_code = unsafe {GetLastError()};
-            debug_log!(format!("Error: size was 0: {}", error_code));
+            debug_log!(format!("Error: size was 0: {}", unsafe {GetLastError()}));
             return Err(format!("Failed to read memory at address {:?}. Error code: {}", address, unsafe { GetLastError() }));
         }
 
@@ -202,34 +194,54 @@ pub mod memory_tools
     ///
     /// # Arguments
     ///
-    /// * `process_handle` - A handle to the process to read memory from.
-    /// * `start_address` - The starting address in the target process to begin scanning.
-    /// * `chunk_size` - The size of the memory chunk to scan.
-    /// * `pattern` - The pattern to search for within the memory chunk.
+    /// * `process_handle` - Handle to the process to read memory from
+    /// * `start_address` - Starting address to begin scanning
+    /// * `chunk_size` - Total size of memory region to scan
+    /// * `pattern` - Byte pattern to search for
     ///
     /// # Returns
     ///
-    /// A `Result` containing `true` if the pattern is found, or `false` if not.
-    /// Returns `Err(())` if there is a failure reading the memory.
-    pub fn scan_memory(process_handle: HANDLE, start_address: *const u8, chunk_size: usize, pattern: &[u8], ) -> Result<bool, ()> 
+    /// * `Ok(true)` if pattern is found
+    /// * `Ok(false)` if pattern is not found
+    /// * `Err(ScanError)` if memory read fails
+    pub fn scan_memory(process_handle: HANDLE, start_address: *const u8, chunk_size: usize, pattern: &[u8]) -> Result<bool, ScanError>
     {
-        for offset in (0..chunk_size).step_by(4096) 
+
+        if start_address.is_null() {
+            return Err(ScanError::InvalidAddress);
+        }
+
+        if pattern.is_empty() {
+            return Err(ScanError::EmptyPattern);
+        }
+
+        if chunk_size == 0 {
+            return Err(ScanError::InvalidSize);
+        }
+
+        const PAGE_SIZE: usize = 4096;
+        let mut current_offset = 0;
+
+        while current_offset < chunk_size
         {
-            let current_address = unsafe { start_address.add(offset) };
+            let remaining = chunk_size - current_offset;
+            let chunk_size = remaining.min(PAGE_SIZE);
 
-            match read_memory::<[u8; 4096]>(process_handle, current_address) 
-            {
-                Ok(chunk) => 
-                {
-                    let result = memmem!(chunk.as_ptr(), chunk.len(), pattern.as_ptr(), pattern.len());
+            let current_address = unsafe { start_address.add(current_offset) };
 
-                    if result.is_some() 
-                    {
+            match read_memory::<[u8; PAGE_SIZE]>(process_handle, current_address) {
+                Ok(chunk) => {
+                    if let Some(_) = memmem!(chunk.as_ptr(),chunk_size,pattern.as_ptr(),pattern.len()) {
                         return Ok(true);
                     }
+                },
+                Err(e) => {
+                    debug_log!(format!("Memory read failed at {:?}: {}", current_address, e));
+                    return Err(ScanError::ReadFailed(e));
                 }
-                Err(_) => return Err(()),
             }
+
+            current_offset += PAGE_SIZE;
         }
 
         Ok(false)

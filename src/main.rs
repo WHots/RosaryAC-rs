@@ -30,7 +30,7 @@ use crate::processutils::ProcessInfo;
 
 const PROCESS_FLAGS: u32 = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ;
 const BASE_CRIT_THREAT_SCORE: f64 = 2.0;
-const HIGH_ENTROPY: f64 = 6.7;
+const HIGH_ENTROPY: f64 = 6.58;
 
 
 
@@ -74,6 +74,7 @@ impl ProcessThreatInfo
             "QueueUserAPC",
             "SetThreadContext",
             "ResumeThread"
+            //  ...
         ];
 
         let process_info = ProcessInfo::new(pid, process_handle);
@@ -152,9 +153,14 @@ impl ProcessThreatInfo
         };
 
         let is_suspect_anyways = {
+
             let high_threat = threat_score > BASE_CRIT_THREAT_SCORE;
             let high_entropy = file_entropy.map_or(false, |entropy| entropy > HIGH_ENTROPY);
-            high_threat && high_entropy
+            let is_elevated = is_elevated.unwrap_or(false);
+            let is_32_bit = is_32_bit.unwrap_or(false);
+
+            (high_threat && high_entropy) ||
+                (is_32_bit && (high_entropy || is_elevated))
         };
 
         let write_count = match process_info.get_process_write_amount() {
@@ -194,56 +200,6 @@ impl ProcessThreatInfo
 
     fn display(&self)
     {
-
-        /*
-        println!("Process ID: {}", self.pid);
-
-        match &self.image_path {
-            Some(path) => println!("Image Path: {}", path),
-            None => println!("Image Path: Not available"),
-        }
-
-        match self.is_debugged {
-            Some(is_debugged) => println!("Is Debugged: {}", is_debugged),
-            None => println!("Is Debugged: Not available"),
-        }
-
-        match self.is_elevated {
-            Some(is_elevated) => println!("Is Elevated: {}", is_elevated),
-            None => println!("Is Elevated: Not available"),
-        }
-
-        match self.thread_count {
-            Some(count) => println!("Thread Count: {}", count),
-            None => println!("Thread Count: Not available"),
-        }
-
-        match self.is_32_bit {
-            Some(is_32_bit) => println!("Is 32-bit Process: {}", is_32_bit),
-            None => println!("Is 32-bit Process: Not available"),
-        }
-
-        match self.file_entropy {
-            Some(entropy) => println!("File Entropy: {:.6}", entropy),
-            None => println!("File Entropy: Not available"),
-        }
-
-        match &self.file_sha256 {
-            Some(hash) => println!("SHA256: {}", hash),
-            None => println!("SHA256: Not available"),
-        }
-
-        match self.write_count {
-            Ok(write_count) => println!("Write Amount: {}", write_count),
-            Err(_) => println!("Write Amount: Not available"),
-        }
-
-
-        println!("\n\nThreat Score: {:.2}", self.threat_score);
-        println!("Suspect Override: {}", self.is_suspect);
-
-         */
-
         match serde_json::to_string_pretty(self) {
             Ok(json_output) => println!("{}", json_output),
             Err(e) => println!("Error serializing to JSON: {}", e),
@@ -289,7 +245,9 @@ fn main()
     pause_console();
 }
 
-fn pause_console() {
+
+fn pause_console()
+{
     print!("Press Enter to continue...");
     io::stdout().flush().unwrap();
     let _ = io::stdin().read_line(&mut String::new());

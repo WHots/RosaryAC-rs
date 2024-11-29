@@ -104,6 +104,7 @@ fn get_nt_headers(process_handle: HANDLE, base: *const u8) -> Result<IMAGE_NT_HE
 
     if dos_header.e_magic != IMAGE_DOS_SIGNATURE 
     {
+        debug_log!(format!("Error invalid dos signature: {}", unsafe {GetLastError()}));
         return Err(PEError::InvalidDosSignature);
     }
 
@@ -112,6 +113,7 @@ fn get_nt_headers(process_handle: HANDLE, base: *const u8) -> Result<IMAGE_NT_HE
 
     if nt_headers.Signature != IMAGE_NT_SIGNATURE 
     {
+        debug_log!(format!("Error invalid Nt signature: {}", unsafe {GetLastError()}));
         return Err(PEError::InvalidNtSignature);
     }
 
@@ -138,6 +140,7 @@ fn get_import_descriptors(process_handle: HANDLE, nt_headers: &IMAGE_NT_HEADERS6
 
     if import_directory.VirtualAddress == 0 
     {
+        debug_log!(format!("Error no import directory: {}", unsafe {GetLastError()}));
         return Err(PEError::NoImportDirectory);
     }
 
@@ -196,6 +199,7 @@ pub fn search_iat(process_handle: HANDLE, base: *const u8, search_name: &str) ->
         let _module_name = match read_c_string(process_handle, name_address) {
             Ok(module_name) => module_name,
             Err(_) => {
+                debug_log!(format!("Error reading memory failed: {}", unsafe {GetLastError()}));
                 return Err(PEError::ReadMemoryFailed);
             }
         };
@@ -226,8 +230,7 @@ pub fn search_iat(process_handle: HANDLE, base: *const u8, search_name: &str) ->
                     }
                 },
                 Err(_) => {
-                    let error_code = unsafe { GetLastError() };
-                    debug_log!(format!("Error Reading C string: {}", error_code));
+                    debug_log!(format!("Error Reading C string: {}", unsafe {GetLastError()}));
                     return Err(PEError::ReadMemoryFailed);
                 }
             }
@@ -305,6 +308,7 @@ pub fn is_pe_zeroed(process_handle: HANDLE, base: *const u8) -> Result<bool, PEE
     let dos_header: IMAGE_DOS_HEADER = read_memory(process_handle, base).map_err(|_| PEError::ReadMemoryFailed)?;
 
     if dos_header.e_magic != IMAGE_DOS_SIGNATURE {
+        debug_log!(format!("Error invalid dos signature: {}", unsafe {GetLastError()}));
         return Err(PEError::InvalidDosSignature);
     }
 
@@ -312,6 +316,7 @@ pub fn is_pe_zeroed(process_handle: HANDLE, base: *const u8) -> Result<bool, PEE
     let nt_headers: IMAGE_NT_HEADERS64 = read_memory(process_handle, nt_headers_address).map_err(|_| PEError::ReadMemoryFailed)?;
 
     if nt_headers.Signature != IMAGE_NT_SIGNATURE {
+        debug_log!(format!("Error Invalid Nt signature: {}", unsafe {GetLastError()}));
         return Err(PEError::InvalidNtSignature);
     }
 
