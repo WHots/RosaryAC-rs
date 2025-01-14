@@ -79,7 +79,7 @@ pub fn get_file_internal_name(file_path: &OsStr) -> Result<OsString, FileVersion
 }
 
 
-/// Calculates the MD5 signature of a file.
+/// Calculates the sha256 signature of a file.
 ///
 /// # Arguments
 ///
@@ -91,7 +91,7 @@ pub fn get_file_internal_name(file_path: &OsStr) -> Result<OsString, FileVersion
 ///
 /// # Returns
 ///
-/// A `Result` containing either the calculated MD5 signature as a hexadecimal string or an `io::Error`.
+/// A `Result` containing either the calculated sh256 signature as a hexadecimal string or an `io::Error`.
 pub fn get_file_sha256(file_path: &OsStr) -> io::Result<String>
 {
 

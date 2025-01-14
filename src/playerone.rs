@@ -34,6 +34,7 @@ pub mod player_one
 
     use std::ptr::null;
     use std::thread;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use super::*;
 
     /// Defender real-time protection services.
@@ -64,7 +65,7 @@ pub mod player_one
             )
         };
 
-        if service_handle == 0
+        if service_handle == INVALID_HANDLE_VALUE
         {
             None
         }
@@ -89,7 +90,7 @@ pub mod player_one
 
         let scm_handle = unsafe { OpenSCManagerW(null(), null(), SC_MANAGER_ENUMERATE_SERVICE) };
 
-        if scm_handle == 0
+        if scm_handle == INVALID_HANDLE_VALUE
         {
             return false;
         }

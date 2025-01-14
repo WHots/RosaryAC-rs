@@ -12,7 +12,7 @@ use std::fmt::Debug;
 use std::mem::size_of;
 use std::ptr::null_mut;
 use std::{fmt, mem, slice};
-use windows_sys::Win32::Foundation::{GetLastError, HANDLE, LocalFree, PSID, STATUS_INFO_LENGTH_MISMATCH};
+use windows_sys::Win32::Foundation::{GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, PSID, STATUS_INFO_LENGTH_MISMATCH};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
 use windows_sys::Win32::System::Threading::{OpenProcess, GetCurrentProcessId, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, GetCurrentProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER, TOKEN_QUERY, EqualSid, TOKEN_ACCESS_MASK};
@@ -23,7 +23,6 @@ use crate::debug_log;
 use crate::memorymanage::{CleanBuffer, CleanHandle};
 use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION_EX, SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX};
 use crate::ntexapi_h::SystemInformationClass::{SystemExtendedHandleInformation};
-use crate::ntpsapi_h::NtQuerySystemInformation;
 use crate::processutils::ProcessError;
 
 const TOKEN_ACCESS_TYPE: TOKEN_ACCESS_MASK = TOKEN_QUERY;
@@ -110,7 +109,7 @@ impl ProcessEnumerator
     #[inline]
     fn get_process_sid(process_handle: HANDLE) -> Result<*mut u16, ProcessEnumError>
     {
-        let mut token_handle: HANDLE = 0;
+        let mut token_handle: HANDLE = INVALID_HANDLE_VALUE;
 
         if unsafe { OpenProcessToken(process_handle, TOKEN_ACCESS_TYPE, &mut token_handle) } == 0 {
             debug_log!(format!("Error opening process token: {}", unsafe { GetLastError() }));
@@ -175,7 +174,7 @@ impl ProcessEnumerator
 
         let snapshot_handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
 
-        if snapshot_handle == -1
+        if snapshot_handle == INVALID_HANDLE_VALUE
         {
             return Err(ProcessEnumError::SnapshotCreationFailed);
         }
@@ -202,14 +201,14 @@ impl ProcessEnumerator
                     OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_entry.th32ProcessID)
                 };
 
-                if let Some(clean_handle) = process_handle.ne(&0).then(|| CleanHandle::new(process_handle)).flatten() {
-                    if let Ok(process_sid) = Self::get_process_sid(clean_handle.as_raw())
-                    {
-                        if Self::compare_sids(process_sid as PSID, current_process_sid as PSID)
-                        {
-                            matching_pids.push(process_entry.th32ProcessID);
+                if process_handle != INVALID_HANDLE_VALUE {
+                    if let Some(clean_handle) = CleanHandle::new(process_handle) {
+                        if let Ok(process_sid) = Self::get_process_sid(clean_handle.as_raw()) {
+                            if Self::compare_sids(process_sid as PSID, current_process_sid as PSID) {
+                                matching_pids.push(process_entry.th32ProcessID);
+                            }
+                            unsafe { LocalFree(process_sid as *mut _) };
                         }
-                        unsafe { LocalFree(process_sid as *mut _) };
                     }
                 }
             }

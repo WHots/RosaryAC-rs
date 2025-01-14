@@ -344,7 +344,7 @@ impl ProcessInfo
     pub fn get_process_privileges(&self) -> Result<Vec<String>, ProcessError>
     {
 
-        let mut token_handle: HANDLE = 0;
+        let mut token_handle: HANDLE = INVALID_HANDLE_VALUE;
 
         if unsafe { OpenProcessToken(self.process_handle, TOKEN_QUERY, &mut token_handle) } == 0
         {
@@ -631,7 +631,7 @@ impl ProcessInfo
     pub fn is_process_elevated(&self) -> Result<bool, ProcessError>
     {
 
-        let mut token_handle: HANDLE = 0;
+        let mut token_handle: HANDLE = INVALID_HANDLE_VALUE;
 
         let token_opened: BOOL = unsafe { OpenProcessToken(self.process_handle, TOKEN_ACCESS_TYPE, &mut token_handle, ) };
 
