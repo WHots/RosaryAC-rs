@@ -7,6 +7,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PR
 use crate::fileutils::{get_file_entropy, get_file_sha256};
 use crate::peutils::IATResult;
 use crate::processcore::ProcessData;
+use crate::processfilters::ProcessEnumerator;
 
 
 mod processutils;
@@ -74,7 +75,7 @@ impl ProcessThreatInfo
             "QueueUserAPC",
             "SetThreadContext",
             "ResumeThread"
-            //  ...
+            //  ... may take from a list a user can define in a cfg file, idk yet.
         ];
 
         let process_info = ProcessInfo::new(pid, process_handle);
@@ -208,39 +209,39 @@ impl ProcessThreatInfo
 }
 
 
-fn main()
-{
+//  Testing stuff
+fn main() {
+    let enumerator = ProcessEnumerator::new();
 
-    let args: Vec<String> = env::args().collect();
-
-    let pid: u32 = if args.len() > 1 {
-        match args[1].parse() {
-            Ok(pid) => pid,
-            Err(_) => {
-                eprintln!("\nInvalid process ID provided. Using the current process ID instead.\n");
-                unsafe { GetCurrentProcessId() }
-            }
-        }
-    }
-    else
+    match enumerator.enumerate_processes()
     {
-        unsafe { GetCurrentProcessId() }
-    };
+        Ok(pids) => {
+            if pids.is_empty() {
+                println!("No matching processes found");
+                return;
+            }
 
-    let process_handle: HANDLE = match unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) } {
-        0 => {
-            let error_code = unsafe { GetLastError() };
-            debug_log!(format!("Process handle was empty: {}", error_code));
-            return;
+            println!("Found {} matching processes", pids.len());
+
+            for pid in pids {
+                println!("Processing PID: {}", pid);
+
+                let process_handle = match unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) } {
+                    0 => {
+                        println!("Failed to open process {}", pid);
+                        continue;
+                    },
+                    handle => handle,
+                };
+
+                let process_threat_info = ProcessThreatInfo::new(pid, process_handle);
+                process_threat_info.display();
+
+                unsafe { CloseHandle(process_handle) };
+            }
         },
-        handle => handle,
-    };
-
-    let process_threat_info = ProcessThreatInfo::new(pid, process_handle);
-
-    process_threat_info.display();
-
-    unsafe { CloseHandle(process_handle) };
+        Err(e) => eprintln!("Failed to enumerate processes: {}", e)
+    }
 
     pause_console();
 }

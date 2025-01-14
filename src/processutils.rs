@@ -69,7 +69,7 @@ pub enum ProcessError
 }
 
 impl Display for ProcessError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             ProcessError::OpenProcessFailed => write!(f, "Failed to open process"),
             ProcessError::ModuleOperationFailed => write!(f, "Failed to perform module operation"),
@@ -87,12 +87,6 @@ impl Display for ProcessError {
             ProcessError::CleanHandleFailed => write!(f, "Failed to create a clean / safe handle to process."),
             ProcessError::Other(code) => write!(f, "Unknown error: {}", code),
         }
-    }
-}
-
-impl From<i32> for ProcessError {
-    fn from(error_code: i32) -> Self {
-        ProcessError::Other(error_code)
     }
 }
 

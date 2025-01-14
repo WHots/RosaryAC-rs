@@ -78,7 +78,6 @@ pub struct ProcessEnumerator
 
 impl ProcessEnumerator
 {
-
     /// Creates a new `ProcessEnumerator`.
     ///
     /// # Returns
@@ -111,7 +110,6 @@ impl ProcessEnumerator
     #[inline]
     fn get_process_sid(process_handle: HANDLE) -> Result<*mut u16, ProcessEnumError>
     {
-
         let mut token_handle: HANDLE = 0;
 
         if unsafe { OpenProcessToken(process_handle, TOKEN_ACCESS_TYPE, &mut token_handle) } == 0 {
@@ -169,101 +167,59 @@ impl ProcessEnumerator
     }
 
 
-
-    pub fn enumerate_processes(&mut self) -> Result<(), ProcessEnumError>
+    pub fn enumerate_processes(&self) -> Result<Vec<u32>, ProcessEnumError>
     {
 
         let current_process_sid = self.current_process_sid
-            .ok_or_else(|| { debug_log!("Failed to get current process SID");ProcessEnumError::SidRetrievalFailed })?;
+            .ok_or(ProcessEnumError::SidRetrievalFailed)?;
 
         let snapshot_handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
 
-        if snapshot_handle == -1 {
-            debug_log!(format!("Error creating snapshot of process list: {}", unsafe { GetLastError() }));
+        if snapshot_handle == -1
+        {
             return Err(ProcessEnumError::SnapshotCreationFailed);
         }
 
-        self.snapshot_handle = Some(CleanHandle::new(snapshot_handle)
-            .ok_or_else(|| { debug_log!("Failed to create clean handle for snapshot");ProcessEnumError::SnapshotCreationFailed })?);
+        let snapshot_handle = CleanHandle::new(snapshot_handle)
+            .ok_or(ProcessEnumError::SnapshotCreationFailed)?;
 
-        let snapshot_handle = self.snapshot_handle.as_ref()
-            .ok_or_else(|| { debug_log!("Snapshot handle was None after creation");ProcessEnumError::SnapshotCreationFailed })?;
+        let mut matching_pids = Vec::new();
 
         let mut process_entry = PROCESSENTRY32W {
             dwSize: size_of::<PROCESSENTRY32W>() as u32,
             ..unsafe { mem::zeroed() }
         };
 
-        if unsafe { Process32FirstW(snapshot_handle.as_raw(), &mut process_entry) } == 0 {
-            debug_log!(format!("Error with process enumeration: {}", unsafe { GetLastError() }));
+        if unsafe { Process32FirstW(snapshot_handle.as_raw(), &mut process_entry) } == 0
+        {
             return Err(ProcessEnumError::ProcessEnumerationFailed);
         }
 
-        let mut processes_checked = 0;
-        let mut processes_matched = 0;
-
         loop {
-            processes_checked += 1;
-
-            if process_entry.th32ProcessID != self.current_process_id {
+            if process_entry.th32ProcessID != self.current_process_id
+            {
                 let process_handle = unsafe {
                     OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_entry.th32ProcessID)
                 };
 
-                if process_handle == 0 { debug_log!(format!("Failed to open process {} with error: {}",process_entry.th32ProcessID,unsafe { GetLastError() }));
-                    continue;
-                }
-
-                let clean_handle = match CleanHandle::new(process_handle) {
-                    Some(handle) => handle,
-                    None => { debug_log!(format!("Failed to create clean handle for process {}",process_entry.th32ProcessID));
-                        continue;
-                    }
-                };
-
-                match Self::get_process_sid(clean_handle.as_raw()) {
-                    Ok(process_sid) => {
-                        if Self::compare_sids(process_sid as PSID, current_process_sid as PSID) {
-                            self.matching_pids.push(process_entry.th32ProcessID);
-                            self.open_process_handles.push(clean_handle);
-                            processes_matched += 1;
+                if let Some(clean_handle) = process_handle.ne(&0).then(|| CleanHandle::new(process_handle)).flatten() {
+                    if let Ok(process_sid) = Self::get_process_sid(clean_handle.as_raw())
+                    {
+                        if Self::compare_sids(process_sid as PSID, current_process_sid as PSID)
+                        {
+                            matching_pids.push(process_entry.th32ProcessID);
                         }
                         unsafe { LocalFree(process_sid as *mut _) };
-                    }
-                    Err(e) => {
-                        debug_log!(format!("Failed to get SID for process {} with error: {}",process_entry.th32ProcessID,unsafe { GetLastError() }));
                     }
                 }
             }
 
             if unsafe { Process32NextW(snapshot_handle.as_raw(), &mut process_entry) } == 0 {
-                if unsafe { GetLastError() } != 18 {
-                    debug_log!(format!("Process32NextW failed with unexpected error: {}", unsafe { GetLastError() }));
-                }
                 break;
             }
         }
 
-        Ok(())
-    }
-
-
-    /// Process the list of matching process IDs with a generic function.
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A closure or function that processes each process ID.
-    ///
-    /// # How it works
-    ///
-    /// Iterates through the list of matching PIDs, applying the provided function to each.
-    pub fn process_matching_pids<F>(&self, f: F)
-        where
-            F: Fn(u32),
-    {
-        for &pid in &self.matching_pids {
-            f(pid);
-        }
+        Ok(matching_pids)
     }
 }
 
