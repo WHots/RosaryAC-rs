@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::{fmt::{Display, Formatter}, fmt};
 use serde::{Serialize, Deserialize};
-use crate::processutils::{ ProcessInfo};
+use crate::processutils::{ProcessInfo, WindowStats};
 
 
 
@@ -30,8 +30,10 @@ pub enum ProcessDataError
 }
 
 
-impl Display for ProcessDataError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl Display for ProcessDataError
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result
+    {
         match self {
             ProcessDataError::ImagePathError(msg) => write!(f, "Failed Fetching Image Path: {}", msg),
             ProcessDataError::DebuggerError(msg) => write!(f, "Debugger Check Error: {}", msg),
@@ -49,8 +51,7 @@ impl Display for ProcessDataError {
 impl std::error::Error for ProcessDataError {}
 
 
-/// `ProcessData` struct holds information about a process.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug)]
 pub struct ProcessData
 {
     pub(crate) pid: u32,
@@ -65,13 +66,16 @@ pub struct ProcessData
     pub(crate) malicious_threads: Option<Vec<u32>>,
     pub(crate) has_malicious_threads: bool,
     pub(crate) is_32_bit: Result<bool, ProcessDataError>,
+    pub(crate) window_title: Option<String>,
+    pub(crate) window_stats: Option<WindowStats>
 }
 
 
 
-impl ProcessData {
-    /// Creates a new `ProcessData` instance with the given process ID.
-    pub fn new(pid: u32) -> Self {
+impl ProcessData
+{
+    pub fn new(pid: u32) -> Self
+    {
         Self {
             pid,
             image_path: Err(ProcessDataError::ImagePathError("Not initialized".to_string())),
@@ -85,6 +89,8 @@ impl ProcessData {
             malicious_threads: None,
             has_malicious_threads: false,
             is_32_bit: Err(ProcessDataError::SecurityError("Not initialized".to_string())),
+            window_title: None,
+            window_stats: None,
         }
     }
 
@@ -148,12 +154,26 @@ impl ProcessData {
                 self.has_malicious_threads = has_malicious_threads;
             }
             Err(_) => {
-                println!("Error occurred while scanning for injected threads.");    //  no no no
+                //  noooooo
             }
         }
 
         self.is_32_bit = process_info.is_32_bit_process()
             .map_err(|e| ProcessDataError::Wow64Error(e.to_string()));
+
+        self.window_title = match process_info.get_window_title() {
+            Ok(title) => title,
+            Err(e) => {
+                None
+            }
+        };
+
+        self.window_stats = match process_info.get_window_stats() {
+            Ok(stats) => Some(stats),
+            Err(e) => {
+                None
+            }
+        };
     }
 
 
@@ -161,32 +181,13 @@ impl ProcessData {
     ///
     /// This method analyzes various attributes of the process, such as debugging status,
     /// elevation, WoW64 status, protection status, presence of malicious threads,
-    /// token privileges, and thread characteristics to compute a threat score.
+    /// token privileges, and thread characteristics, window stats to compute a threat score.
     ///
     /// # Returns
     ///
     /// A tuple containing:
     /// - `f32`: The calculated threat score, ranging from 0.0 to 14.0.
     /// - `Vec<u32>`: A list of process IDs of detected malicious threads.
-    ///
-    /// # Scoring Factors
-    ///
-    /// - Debugged process: +2.0
-    /// - Elevated process: +6.5
-    /// - WoW64 process: +0.5
-    /// - Protected process: -1.0
-    /// - Each malicious thread: +0.5
-    /// - Each token privilege: +1.25
-    /// - Each hidden thread: +2.5
-    /// - Each thread not owned by the process: +1.0
-    /// - Is process 32-bit: 3.25
-    ///
-    /// The final score is clamped between 0.0 and 14.0.
-    ///
-    /// # Note
-    ///
-    /// This method does not modify the `ProcessData` instance and can be called multiple times
-    /// to recalculate the score based on the current state of the process data.
     pub fn base_score_process(&self) -> (f32, Vec<u32>)
     {
         let mut threat_score: f32 = 0.0;
@@ -233,6 +234,32 @@ impl ProcessData {
             for _ in 0..*not_owned_count {
                 threat_score += 1.0;
             }
+        }
+
+        if let Ok(is_32_bit) = self.is_32_bit
+        {
+            if is_32_bit
+            {
+                threat_score += 3.25;
+            }
+        }
+
+        if let Some(stats) = &self.window_stats
+        {
+            if stats.invisible_count > 1
+            {
+                threat_score += 3.0;
+            }
+
+            //  Has more hidden windows than visible.
+            if stats.invisible_count > stats.visible_count {
+                threat_score += 2.5;
+            }
+        }
+
+        if self.window_title.is_none() &&
+            self.window_stats.as_ref().map_or(false, |s| s.visible_count + s.invisible_count > 0) {
+            threat_score += 2.0;
         }
 
         if let Ok(is_32_bit) = self.is_32_bit
