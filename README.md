@@ -1,10 +1,7 @@
 # RosaryEDR - Proof of Concept User Mode EDR / Threat Detection System (Work in Progress)
 
-![image (2)](https://github.com/user-attachments/assets/aa8afcbb-647a-471d-a3eb-d399cc214bd9)
-
 ## About The Project
-
-RosaryEDR is a **proof of concept (PoC)** user mode Endpoint Detection and Response (EDR) / Threat Detection System designed to identify and report suspicious activities on endpoints. This project is currently experimental and under development. The codebase and the project's direction are subject to change at any time.
+RosaryEDR is a **proof of concept (PoC)** user mode Endpoint Detection and Response (EDR) / Threat Detection System designed to identify and report suspicious activities on endpoints. This project is experimental and focuses solely on threat detection and notification, without active threat elimination.
 
 **Project Change Log**
 - **Date:** 8/6/2024
@@ -15,30 +12,59 @@ RosaryEDR is a **proof of concept (PoC)** user mode Endpoint Detection and Respo
 This application is intended as a PoC for those interested in endpoint security mechanisms. It is important to note that RosaryEDR **does not provide resources for executing or reversing malicious activities**. Additionally, it is not designed to target or single out any specific threat actor.
 
 ### Built With
-
 - **Rust Language:** The core of RosaryEDR is built using Rust, known for its safety and performance.
 
 ### Prerequisites
-
 To work with RosaryEDR, you must have Rust and Cargo installed on your system. You can install them using rustup, which is available [here](https://rustup.rs/).
 
-## EDR Rules
+## EDR Rules and Limitations
 
-To maintain system security and integrity, RosaryEDR operates under the following rules:
+### Core Operational Rules
+1. **Detection Only Mode:**
+   - The system operates in a **detection-only** mode
+   - Will NOT attempt to eliminate or neutralize threats
+   - Only provides notification and documentation of detected threats
 
-1. **Proof of Malicious Process:**
-   - The system **MUST** be able to prove that a malicious process is **running**. Merely having potentially harmful software installed does **NOT** count. It must be proven that the threat is active at the time of detection.
-   - It also **MUST** be proven that the malicious process is or had interaction with the protected system processes.
+2. **System Interaction Restrictions:**
+   - CANNOT interact with system processes
+   - CANNOT write into process memory
+   - CANNOT modify any system settings or configurations
 
-2. **Memory and Process Interaction:**
-   - The system **is NOT** allowed to write into process memory nor interact with system processes during the user-mode stages of this project. This ensures the system operates safely and respects system integrity.
+3. **Network Restrictions:**
+   - Operates 100% offline
+   - NO third-party network connections
+   - NO downloading or uploading of files
+   - NO external data fetching
 
-3. **Querying Machine Information:**
-   - The system **CAN** query machine information, but **ONLY** during runtime. None of the information queried should be personally identifiable to the user, maintaining user privacy and security.
+4. **File System Operations:**
+   - CAN create its own directories and files
+   - CAN only write to files/directories it has created
+   - CANNOT modify any existing system files
 
-4. **Network Connections:**
-   - The system **is NOT** permitted to create any type of third-party network connection whatsoever. It must not download or upload files, nor fetch any information. The system is designed to operate **100% offline**.
+### Threat Detection Requirements
+1. **Evidence Requirements:**
+   - Must provide concrete proof of active threats
+   - Must document interactions with protected processes
+   - Static presence of potentially harmful software is NOT sufficient for alert
+
+2. **Documentation Required:**
+   - Must capture screen evidence of detected threats
+   - Must create a detailed snapshot of threat characteristics
+   - Must maintain logs of detection events
+
+### Privacy and Security
+1. **Information Gathering:**
+   - Only collects runtime information
+   - NO collection of personally identifiable information
+   - NO persistent tracking of user activities
+
+2. **Data Storage:**
+   - All data stored locally
+   - NO cloud storage or transmission
+   - Only stores information relevant to threat detection
 
 ---
 
-**Note:** As this project is a work in progress, the information provided here is subject to change. Keep an eye on the repository for the latest updates. Your contributions and suggestions are welcome to improve RosaryEDR. For any issues or feature requests, please refer to the [issues section](#).
+**Note:** As this project is a work in progress, these rules and requirements may be subject to refinement. The focus remains on creating a secure, privacy-respecting threat detection system that operates within strict ethical boundaries.
+
+For any issues or feature requests, please refer to the [issues section](#).
