@@ -9,7 +9,10 @@
 use std::collections::HashMap;
 use std::{fmt::{Display, Formatter}, fmt};
 use serde::{Serialize, Deserialize};
-use crate::processutils::{ProcessInfo, WindowStats};
+//use serde::de::Unexpected::Option;
+use crate::processutils::{ProcessInfo};
+// In processutils.rs at the top with other imports
+use crate::windowutils::{self, WindowStats, WindowError};
 
 
 
@@ -67,7 +70,8 @@ pub struct ProcessData
     pub(crate) has_malicious_threads: bool,
     pub(crate) is_32_bit: Result<bool, ProcessDataError>,
     pub(crate) window_title: Option<String>,
-    pub(crate) window_stats: Option<WindowStats>
+    pub(crate) window_stats: Option<WindowStats>,
+    pub(crate) is_pe_zero: Option<bool>
 }
 
 
@@ -91,6 +95,7 @@ impl ProcessData
             is_32_bit: Err(ProcessDataError::SecurityError("Not initialized".to_string())),
             window_title: None,
             window_stats: None,
+            is_pe_zero: None
         }
     }
 
@@ -174,6 +179,20 @@ impl ProcessData
                 None
             }
         };
+
+        self.is_pe_zero = match &self.image_path {
+            Ok(_) => {
+                if let Ok((base_address, _)) = process_info.get_main_module_ex() {
+                    match crate::peutils::is_pe_zeroed(process_info.process_handle, base_address) {
+                        Ok(zeroed) => Some(zeroed),
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                }
+            },
+            Err(_) => None,
+        };
     }
 
 
@@ -181,7 +200,7 @@ impl ProcessData
     ///
     /// This method analyzes various attributes of the process, such as debugging status,
     /// elevation, WoW64 status, protection status, presence of malicious threads,
-    /// token privileges, and thread characteristics, window stats to compute a threat score.
+    /// token privileges, and thread characteristics, window stats, & PE stats to compute a threat score.
     ///
     /// # Returns
     ///
@@ -267,6 +286,17 @@ impl ProcessData
             if is_32_bit
             {
                 threat_score += 3.25;
+            }
+        }
+
+        if let Some(zeroed) = self.is_pe_zero
+        {
+            if zeroed
+            {
+                threat_score += 4.5; // High score due to severity of zeroed PE
+            }
+            else {
+                threat_score -= 3.0;
             }
         }
 

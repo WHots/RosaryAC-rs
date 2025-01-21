@@ -23,12 +23,13 @@ use windows_sys::Win32::System::WindowsProgramming::CLIENT_ID;
 use windows_sys::Win32::Security::{AllocateLocallyUniqueId, GetTokenInformation, LookupPrivilegeNameW, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SE_PRIVILEGE_ENABLED, TOKEN_ACCESS_MASK, TOKEN_ELEVATION, TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TokenElevation};
 use windows_sys::Win32::System::SystemServices::PRIVILEGE_SET_ALL_NECESSARY;
 use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindow, GetWindowTextW, GetWindowThreadProcessId, GW_OWNER, IsWindowVisible};
-use crate::debug_log;
+use crate::{debug_log, windowutils};
 
 use crate::memorymanage::{CleanBuffer, CleanHandle};
 use crate::ntexapi_h::{SYSTEM_HANDLE_INFORMATION, SYSTEM_HANDLE_TABLE_ENTRY_INFO, SystemInformationClass};
 use crate::ntexapi_h::SystemInformationClass::SystemHandleInformation;
 use crate::ntpsapi_h::{NtPrivilegeCheck, NtQueryInformationProcess, NtQueryInformationThread, NtQueryInformationToken, NtQuerySystemInformation, PROCESS_EXTENDED_BASIC_INFORMATION, ProcessInformationClass, THREAD_BASIC_INFORMATION, THREADINFOCLASS};
+use crate::windowutils::WindowStats;
 use crate::winnt_h::{TOKEN_PRIVILEGES, TokenInformationClass};
 use crate::winnt_h::TokenInformationClass::TokenPrivileges;
 
@@ -131,19 +132,10 @@ impl PROCESS_EXTENDED_BASIC_INFORMATION
 }
 
 
-/// Structure to hold window visibility statistics
-#[derive(Debug)]
-pub struct WindowStats
-{
-    pub(crate) visible_count: u32,
-    pub(crate) invisible_count: u32,
-}
-
-
 pub struct ProcessInfo
 {
     pub(crate) pid: u32,
-    process_handle: HANDLE,
+    pub(crate) process_handle: HANDLE,
 }
 
 impl ProcessInfo
@@ -952,133 +944,35 @@ impl ProcessInfo
     }
 
 
-    /// Gets the title of the main window for the process.
+    /// Gets the title of the main window for a process.
     ///
     /// Enumerates all top-level windows in the system to find the first window belonging
-    /// to this process. When found, retrieves the window's title text.
+    /// to the specified process ID and retrieves its title text if found.
+    ///
+    /// # Arguments
+    /// * `pid` - The process ID to find the window for
     ///
     /// # Returns
-    ///
-    /// * `Ok(Some(String))` - The title of the first window found for this process
-    /// * `Ok(None)` - No window was found for this process
-    /// * `Err(ProcessError::EnumWindowsFail)` - An error occurred during window enumeration
+    /// * `Ok(Some(String))` - The title of the first window found for the process
+    /// * `Ok(None)` - No window was found for the process
+    /// * `Err(WindowError::EnumWindowsFail)` - An error occurred during window enumeration
     pub fn get_window_title(&self) -> Result<Option<String>, ProcessError>
     {
-
-        struct EnumWindowsState
-        {
-            pid: u32,
-            window_title: Option<String>,
-        }
-
-        unsafe extern "system" fn enum_windows_callback(hwnd: HWND, state: isize) -> i32
-        {
-
-            let state = &mut *(state as *mut EnumWindowsState);
-            let mut window_pid: u32 = 0;
-
-            GetWindowThreadProcessId(hwnd, &mut window_pid);
-
-            if window_pid == state.pid
-            {
-                let mut title = vec![0u16; 512];
-                let length = GetWindowTextW(hwnd, title.as_mut_ptr(), 512) as usize;
-
-                if length > 0
-                {
-                    title.truncate(length);
-                    state.window_title = Some(String::from_utf16_lossy(&title));
-                    return 0;
-                }
-            }
-
-            1
-        }
-
-        let mut state = EnumWindowsState {
-            pid: self.pid,
-            window_title: None,
-        };
-
-        let result = unsafe {
-            EnumWindows(
-                Some(enum_windows_callback),
-                &mut state as *mut EnumWindowsState as isize
-            )
-        };
-
-        if result == 0 && state.window_title.is_none()
-        {
-            debug_log!(format!("Error enumerating windows: {}", unsafe { GetLastError() }));
-            return Err(ProcessError::EnumWindowsFail);
-        }
-
-        Ok(state.window_title)
+        windowutils::get_window_title(self.pid).map_err(|_| ProcessError::EnumWindowsFail)
     }
 
 
-    /// Determines the count of visible and invisible windows for the process.
+    /// Retrieves statistics about visible and invisible windows for this process.
     ///
-    /// This method enumerates all top-level windows in the system and counts the number
-    /// of visible and invisible windows belonging to the target process. Only main windows
-    /// (those without owners) are counted.
+    /// Counts top-level windows (those without owners) belonging to the process,
+    /// categorizing them as either visible or invisible based on their current state.
     ///
     /// # Returns
-    ///
-    /// * `Result<WindowStats, ProcessError>` - A struct containing counts of visible and invisible windows.
-    ///
-    /// # Error
-    ///
-    /// Returns ProcessError if window enumeration fails.
+    /// * `Result<WindowStats, ProcessError>` - Contains the count of visible and invisible windows.
+    ///   - Success: `WindowStats` with the counts of each type
+    ///   - Error: `ProcessError::EnumWindowsFail` if window enumeration fails
     pub fn get_window_stats(&self) -> Result<WindowStats, ProcessError>
     {
-
-        static VISIBLE_COUNT: AtomicU32 = AtomicU32::new(0);
-        static INVISIBLE_COUNT: AtomicU32 = AtomicU32::new(0);
-        static TARGET_PID: AtomicU32 = AtomicU32::new(0);
-
-        VISIBLE_COUNT.store(0, Ordering::SeqCst);
-        INVISIBLE_COUNT.store(0, Ordering::SeqCst);
-        TARGET_PID.store(self.pid, Ordering::SeqCst);
-
-        unsafe extern "system" fn enum_window_callback(window: HWND, _: LPARAM) -> BOOL
-        {
-
-            let mut process_id: u32 = 0;
-            GetWindowThreadProcessId(window, &mut process_id);
-
-            if process_id == TARGET_PID.load(Ordering::SeqCst)
-            {
-                let owner = GetWindow(window, GW_OWNER);
-
-                if owner == 0
-                {
-                    if IsWindowVisible(window) != 0
-                    {
-                        VISIBLE_COUNT.fetch_add(1, Ordering::SeqCst);
-                    }
-                    else
-                    {
-                        INVISIBLE_COUNT.fetch_add(1, Ordering::SeqCst);
-                    }
-                }
-            }
-            1
-        }
-
-        let result = unsafe { EnumWindows(Some(enum_window_callback), 0) };
-
-        if result == 0
-        {
-            debug_log!(format!("Error enumerating windows: {}", unsafe { GetLastError() }));
-            Err(ProcessError::EnumWindowsFail)
-        }
-        else
-        {
-            Ok(WindowStats {
-                visible_count: VISIBLE_COUNT.load(Ordering::SeqCst),
-                invisible_count: INVISIBLE_COUNT.load(Ordering::SeqCst),
-            })
-        }
+        windowutils::get_window_stats(self.pid).map_err(|_| ProcessError::EnumWindowsFail)
     }
 }

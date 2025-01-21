@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 use crate::processfilters::ProcessEnumerator;
-use crate::processthreatprocessor::ProcessThreatInfo;
+use crate::processthreatprocessor::{BASE_CRIT_THREAT_SCORE, ProcessThreatInfo};
 
 
 mod processutils;
@@ -22,14 +22,21 @@ mod peutils;
 mod mathutils;
 mod monitor;
 mod processthreatprocessor;
+mod screenshot;
+mod windowutils;
+
 
 //  Flags for opening every process.
 const PROCESS_FLAGS: u32 = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ;
 
-fn main() {
+
+fn main()
+{
+
     let enumerator = ProcessEnumerator::new();
 
     match enumerator.enumerate_processes() {
+
         Ok(pids) => {
             if pids.is_empty() {
                 return;
@@ -42,7 +49,11 @@ fn main() {
                 };
 
                 let process_threat_info = ProcessThreatInfo::new(pid, process_handle);
-                process_threat_info.display();
+
+                if process_threat_info.threat_score >= BASE_CRIT_THREAT_SCORE
+                {
+                    process_threat_info.display();
+                }
 
                 unsafe { CloseHandle(process_handle) };
             }
@@ -53,7 +64,10 @@ fn main() {
     pause_console();
 }
 
-fn pause_console() {
+
+
+fn pause_console()
+{
     print!("Press Enter to continue...");
     io::stdout().flush().unwrap();
     let _ = io::stdin().read_line(&mut String::new());

@@ -12,18 +12,22 @@ use windows_sys::Win32::Foundation::HANDLE;
 use crate::fileutils::{get_file_entropy, get_file_sha256};
 use crate::peutils::IATResult;
 use crate::processcore::ProcessData;
-use crate::processutils::ProcessInfo;
+use crate::processutils::{ProcessInfo};
+use crate::windowutils::{self, WindowStats, WindowError};
 use crate::{debug_log, peutils};
 
+
 //  The lowest score of a process to be considered for 'suspect_override'.
-const BASE_CRIT_THREAT_SCORE: f64 = 5.6;
+pub const BASE_CRIT_THREAT_SCORE: f64 = 4.6;
 //  Hard coded value for arguably high file entropy.
 const HIGH_ENTROPY: f64 = 6.58;
 //  Score of all found sus APIs, the max score is 9 meaning every API from the list was found.
 const SUSPICIOUS_API_SCORE: f32 = 0.75;
 
+
 #[derive(Serialize)]
-pub struct ProcessThreatInfo {
+pub struct ProcessThreatInfo
+{
     pid: u32,
     image_path: Option<String>,
     is_debugged: Option<bool>,
@@ -38,13 +42,16 @@ pub struct ProcessThreatInfo {
     write_count: f64,
     suspicious_imports: Vec<String>,
     privileges: Vec<String>,
-    threat_score: f64,
+    is_pe_zero: Option<bool>,
+    pe_sections: Vec<String>,
+    pub(crate) threat_score: f64,
     suspect_override: bool
 }
 
 impl ProcessThreatInfo
 {
-    pub fn process_bad_imports(pid: u32, process_handle: HANDLE) -> Vec<(String, bool)>
+    #[inline]
+    fn process_bad_imports(pid: u32, process_handle: HANDLE) -> Vec<(String, bool)>
     {
         let suspicious_apis = [
             "VirtualAllocEx",
@@ -147,21 +154,48 @@ impl ProcessThreatInfo
             Err(_) => None,
         };
 
-        let suspect_override = {
+        let is_pe_zero = process_data.is_pe_zero;
 
-            let high_threat = threat_score > BASE_CRIT_THREAT_SCORE as f32;
-            let high_entropy = file_entropy.map_or(false, |entropy| entropy > HIGH_ENTROPY);
-            let is_elevated = is_elevated.unwrap_or(false);
-            let is_32_bit = is_32_bit.unwrap_or(false);
-            let has_hidden_windows = process_data.window_stats.as_ref().map_or(false, |stats| stats.invisible_count > 0 && stats.visible_count == 0);
-
-            (high_threat && high_entropy) || (is_32_bit && (high_entropy || is_elevated)) || (has_hidden_windows && high_threat)
+        let pe_sections = if let Ok((base_address, _)) = process_info.get_main_module_ex() {
+            match peutils::get_pe_sections(process_handle, base_address) {
+                Ok(sections) => sections,
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
         };
 
         let write_count = match process_info.get_process_write_amount() {
             Ok(amount) => amount,
             Err(_) => -0.0
         };
+
+        let suspect_override = {
+            let high_threat = threat_score > BASE_CRIT_THREAT_SCORE as f32;
+            let high_entropy = file_entropy.map_or(false, |entropy| entropy > HIGH_ENTROPY);
+            let is_elevated = is_elevated.unwrap_or(false);
+            let is_32_bit = is_32_bit.unwrap_or(false);
+            let has_hidden_windows = process_data.window_stats.as_ref().map_or(false, |stats| stats.invisible_count > 0 && stats.visible_count == 0);
+            let has_zeroed_pe = is_pe_zero.unwrap_or(false);
+            let high_write_count = write_count > 5.0; // Over 4MB written
+            let many_suspicious_imports = suspicious_imports.len() >= 3; // 3 or more suspicious APIs
+            let has_anomalous_threads = process_data.thread_count.get("NOT Owned").map_or(false, |&count| count > 0) || process_data.thread_count.get("Hidden Flag").map_or(false, |&count| count > 0);
+
+            (high_threat && high_entropy) ||
+                // Architecture and privilege escalation risks
+                (is_32_bit && (high_entropy || is_elevated)) ||
+                // Hidden process behaviors
+                (has_hidden_windows && high_threat) ||
+                // PE file manipulation
+                (has_zeroed_pe && (high_threat || high_entropy)) ||
+                // Suspicious activity patterns
+                (high_write_count && (many_suspicious_imports || high_entropy)) ||
+                // Thread manipulation
+                (has_anomalous_threads && (high_threat || many_suspicious_imports)) ||
+                // Multiple suspicious indicators
+                (many_suspicious_imports && high_entropy && is_elevated)
+        };
+
 
         let privileges = match process_info.get_process_privileges() {
             Ok(privs) => privs,
@@ -173,7 +207,8 @@ impl ProcessThreatInfo
             |stats| (Some(stats.visible_count), Some(stats.invisible_count))
         );
 
-        Self {
+
+       Self {
             pid,
             image_path,
             is_debugged,
@@ -186,10 +221,12 @@ impl ProcessThreatInfo
             file_entropy,
             file_sha256,
             is_32_bit,
-            suspect_override,
+            suspect_override: false,  // temporary value
             write_count,
             suspicious_imports,
-            privileges
+            privileges,
+            is_pe_zero: process_data.is_pe_zero,
+            pe_sections,
         }
     }
 

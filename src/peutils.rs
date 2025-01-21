@@ -209,23 +209,20 @@ pub fn search_iat(process_handle: HANDLE, base: *const u8, search_name: &str) ->
 
         loop {
 
-            let original_thunk_data: IMAGE_THUNK_DATA64 = read_memory(
-                process_handle,
-                unsafe { original_thunk_address.add(i * std::mem::size_of::<IMAGE_THUNK_DATA64>()) } as *const u8,
-            )
-            .map_err(|_| PEError::ReadMemoryFailed)?;
+            let original_thunk_data: IMAGE_THUNK_DATA64 = read_memory(process_handle, unsafe { original_thunk_address.add(i * std::mem::size_of::<IMAGE_THUNK_DATA64>()) } as *const u8, ).map_err(|_| PEError::ReadMemoryFailed)?;
 
             if unsafe { original_thunk_data.u1.AddressOfData } == 0 
             {
                 break;
             }
 
-            let func_name_address = unsafe { base.add(original_thunk_data.u1.AddressOfData as usize) } as *const u8;
+            let func_name_address = unsafe { base.add(original_thunk_data.u1.AddressOfData as usize) };
 
             match read_c_string(process_handle, func_name_address) 
             {
                 Ok(function_name) => {
-                    if strings_match(&function_name, search_name) {
+                    if strings_match(&function_name, search_name)
+                    {
                         return Ok(IATResult::Found);
                     }
                 },
@@ -305,40 +302,157 @@ pub unsafe fn display_section_info(section_name: &str, process_handle: HANDLE, b
 /// A `Result` containing a boolean indicating whether the PE is zeroed out, or a `PEError` otherwise.
 pub fn is_pe_zeroed(process_handle: HANDLE, base: *const u8) -> Result<bool, PEError>
 {
+
+    if process_handle == 0 || base.is_null()
+    {
+        return Err(PEError::Other(1));
+    }
+
+    const MAX_PE_SIZE: usize = 2 * 1024 * 1024;
+    const MIN_PE_SIZE: usize = 0x1000;
+    const PE_ZEROED_PERCENTAGE: f64 = 0.85;
+    const PE_TOTAL_ZEROED: f64 = 0.45;
+
+
     let dos_header: IMAGE_DOS_HEADER = read_memory(process_handle, base).map_err(|_| PEError::ReadMemoryFailed)?;
 
-    if dos_header.e_magic != IMAGE_DOS_SIGNATURE {
+    if dos_header.e_magic != IMAGE_DOS_SIGNATURE || dos_header.e_lfanew <= 0 || (dos_header.e_lfanew as usize) > MAX_PE_SIZE
+    {
+        return Err(PEError::InvalidDosSignature);
+    }
+
+    let nt_headers: IMAGE_NT_HEADERS64 = read_memory(process_handle, unsafe { base.add(dos_header.e_lfanew as usize) }).map_err(|_| PEError::ReadMemoryFailed)?;
+
+    if nt_headers.Signature != IMAGE_NT_SIGNATURE || nt_headers.FileHeader.NumberOfSections == 0 || nt_headers.FileHeader.NumberOfSections > 96
+    {
+        return Err(PEError::InvalidNtSignature);
+    }
+
+    let section_headers_address = unsafe { base.add(dos_header.e_lfanew as usize).add(mem::size_of::<IMAGE_NT_HEADERS64>()) };
+
+    let mut total_sections = 0;
+    let mut zeroed_sections = 0;
+
+    for i in 0..nt_headers.FileHeader.NumberOfSections
+    {
+        let section_header: IMAGE_SECTION_HEADER = read_memory(
+            process_handle,
+            unsafe {
+                section_headers_address.add(i as usize * mem::size_of::<IMAGE_SECTION_HEADER>())
+            } as *const u8
+        ).map_err(|_| PEError::ReadMemoryFailed)?;
+
+        if section_header.SizeOfRawData == 0 || (section_header.SizeOfRawData as usize) > MAX_PE_SIZE || (section_header.VirtualAddress as usize) > MAX_PE_SIZE || (section_header.SizeOfRawData as usize) < MIN_PE_SIZE
+        {
+            continue;
+        }
+
+        let section_data_size = section_header.SizeOfRawData as usize;
+        let mut section_data = CleanBuffer::new(section_data_size);
+
+        if let Ok(_) = read_mem_into_buf(process_handle, unsafe { base.add(section_header.VirtualAddress as usize) }, section_data.as_mut_ptr(), section_data_size)
+        {
+
+            total_sections += 1;
+
+            let zero_count = section_data.as_slice().iter().filter(|&&byte| byte == 0).count();
+
+            if (zero_count as f64 / section_data_size as f64) > PE_ZEROED_PERCENTAGE
+            {
+                zeroed_sections += 1;
+            }
+        }
+    }
+
+    if total_sections > 0
+    {
+        Ok(zeroed_sections as f64 / total_sections as f64 > PE_TOTAL_ZEROED)
+    }
+    else
+    {
+        Err(PEError::Other(6))
+    }
+}
+
+
+/// Gets all section names from a PE file in memory.
+///
+/// # Arguments
+///
+/// * `process_handle` - A handle to the process.
+/// * `base` - The base address in the process's memory.
+///
+/// # Returns
+///
+/// A `Result` containing a vector of section names as String if successful, or a `PEError` otherwise.
+pub fn get_pe_sections(process_handle: HANDLE, base: *const u8) -> Result<Vec<String>, PEError>
+{
+
+    if process_handle == 0 || base.is_null()
+    {
+        return Err(PEError::Other(1));
+    }
+
+    const MAX_PE_SIZE: usize = 2 * 1024 * 1024; // 2MB max size for sanity check
+
+    let dos_header: IMAGE_DOS_HEADER = read_memory(process_handle, base)
+        .map_err(|_| PEError::ReadMemoryFailed)?;
+
+    if dos_header.e_magic != IMAGE_DOS_SIGNATURE || dos_header.e_lfanew <= 0 || (dos_header.e_lfanew as usize) > MAX_PE_SIZE
+    {
         debug_log!(format!("Error invalid dos signature: {}", unsafe {GetLastError()}));
         return Err(PEError::InvalidDosSignature);
     }
 
-    let nt_headers_address = unsafe { base.add(dos_header.e_lfanew as usize) };
-    let nt_headers: IMAGE_NT_HEADERS64 = read_memory(process_handle, nt_headers_address).map_err(|_| PEError::ReadMemoryFailed)?;
+    let nt_headers: IMAGE_NT_HEADERS64 = read_memory(
+        process_handle,
+        unsafe { base.add(dos_header.e_lfanew as usize) }
+    ).map_err(|_| PEError::ReadMemoryFailed)?;
 
-    if nt_headers.Signature != IMAGE_NT_SIGNATURE {
-        debug_log!(format!("Error Invalid Nt signature: {}", unsafe {GetLastError()}));
+    if nt_headers.Signature != IMAGE_NT_SIGNATURE || nt_headers.FileHeader.NumberOfSections == 0 || nt_headers.FileHeader.NumberOfSections > 96  // Sanity check for max sections
+    {
+        debug_log!(format!("Error invalid NT signature: {}", unsafe {GetLastError()}));
         return Err(PEError::InvalidNtSignature);
     }
 
-    let section_headers_address = unsafe { nt_headers_address.add(mem::size_of::<IMAGE_NT_HEADERS64>()) };
+    let section_headers_address = unsafe {
+        base.add(dos_header.e_lfanew as usize)
+            .add(mem::size_of::<IMAGE_NT_HEADERS64>())
+    };
 
-    for i in 0..nt_headers.FileHeader.NumberOfSections
-    {
-        let section_header: IMAGE_SECTION_HEADER = read_memory(process_handle, unsafe {
-            section_headers_address.add(i as usize * mem::size_of::<IMAGE_SECTION_HEADER>())
-        } as *const u8).map_err(|_| PEError::ReadMemoryFailed)?;
+    let mut section_names = Vec::with_capacity(nt_headers.FileHeader.NumberOfSections as usize);
 
-        let section_data_address = unsafe { base.add(section_header.VirtualAddress as usize) };
-        let section_data_size = section_header.SizeOfRawData as usize;
+    for i in 0..nt_headers.FileHeader.NumberOfSections {
+        let section_header: IMAGE_SECTION_HEADER = read_memory(
+            process_handle,
+            unsafe {
+                section_headers_address.add(i as usize * mem::size_of::<IMAGE_SECTION_HEADER>())
+            }
+        ).map_err(|_| PEError::ReadMemoryFailed)?;
 
-        let mut section_data = CleanBuffer::new(section_data_size);
+        let name_bytes = unsafe { slice::from_raw_parts(section_header.Name.as_ptr(), 8) };
+        let name_end = name_bytes.iter()
+            .position(|&c| c == 0)
+            .unwrap_or(8);
 
-        read_mem_into_buf(process_handle, section_data_address, section_data.as_mut_ptr(), section_data_size).map_err(|_| PEError::ReadMemoryFailed)?;
+        let section_name = match std::str::from_utf8(&name_bytes[..name_end]) {
+            Ok(name) => {
 
-        if section_data.as_slice().iter().all(|&byte| byte == 0) {
-            return Ok(true);
-        }
+                let name = name.trim();
+                if name.is_empty()
+                {
+                    "null".to_string()
+                }
+                else
+                {
+                    name.to_string()
+                }
+            },
+            Err(_) => "null".to_string()
+        };
+
+        section_names.push(section_name);
     }
 
-    Ok(false)
+    Ok(section_names)
 }
