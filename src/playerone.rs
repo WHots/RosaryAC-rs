@@ -11,16 +11,18 @@
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use windows_sys::Win32::{
-    Foundation::{HANDLE},
-    System::{
-        Services::{
-            OpenSCManagerW, QueryServiceStatus, SC_MANAGER_ENUMERATE_SERVICE,
-            SERVICE_QUERY_STATUS, OpenServiceW, SERVICE_STATUS,
-        },
-        WindowsProgramming::GetFirmwareEnvironmentVariableW,
-    },
+use std::ptr::null;
+use std::thread;
+
+use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::System::Services::{
+    OpenSCManagerW, OpenServiceW, QueryServiceStatus,
+    SC_MANAGER_ENUMERATE_SERVICE, SERVICE_QUERY_STATUS, SERVICE_STATUS,
 };
+use windows_sys::Win32::System::Registry::{
+    RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ
+};
+use windows_sys::Win32::System::WindowsProgramming::GetFirmwareEnvironmentVariableW;
 
 use crate::memorymanage::CleanHandle;
 use crate::stringutils::to_wide_chars;
@@ -28,17 +30,17 @@ use crate::stringutils::to_wide_chars;
 
 
 
-/// A module for managing Windows services.
 pub mod player_one
 {
 
-    use std::ptr::null;
-    use std::thread;
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use super::*;
+
 
     /// Defender real-time protection services.
     pub const DEF_SERV: [&str; 2] = ["WdNisDrv", "WdNisSvc"];
+
+    const UAC_REGISTRY_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
+    const UAC_CONSENT_VALUE: &str = "ConsentPromptBehaviorAdmin";
 
 
 
@@ -73,6 +75,44 @@ pub mod player_one
         {
             Some(CleanHandle::new(service_handle)?)
         }
+    }
+
+
+    /// Gets the registry value for UAC elevation prompt behavior.
+    ///
+    /// # Returns
+    ///
+    /// `true` if UAC is configured to prompt for credentials (values 1 or 3), `false` otherwise.
+    /// * Value 1 indicates prompting on secure desktop
+    /// * Value 3 indicates prompting without secure desktop
+    /// * Value 0 indicates a fail with code execution
+    /// * Returns false if registry access fails
+    pub fn requires_elevation_prompt() -> u32
+    {
+
+        let key_path = to_wide_chars(UAC_REGISTRY_KEY);
+        let value_name = to_wide_chars(UAC_CONSENT_VALUE);
+        let mut h_key = 0;
+
+        let result = unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, key_path.as_ptr(), 0, KEY_READ, &mut h_key) };
+
+        if result != 0
+        {
+            return 0;
+        }
+
+        let mut data_type = 0;
+        let mut data = 0u32;
+        let mut data_size = std::mem::size_of::<u32>() as u32;
+
+        let status = unsafe { RegQueryValueExW(h_key, value_name.as_ptr(), std::ptr::null_mut(), &mut data_type, &mut data as *mut u32 as *mut u8, &mut data_size) };
+
+        if status != 0
+        {
+            return 0;
+        }
+
+        data
     }
 
 
@@ -143,14 +183,7 @@ pub mod player_one
         let name = to_wide_chars("SecureBoot");
         let guid = to_wide_chars("{8BE4DF61-93CA-11D2-AA0D-00E098032B8C}");
 
-        let result = unsafe {
-            GetFirmwareEnvironmentVariableW(
-                name.as_ptr(),
-                guid.as_ptr(),
-                std::ptr::null_mut(),
-                0,
-            )
-        };
+        let result = unsafe { GetFirmwareEnvironmentVariableW(name.as_ptr(), guid.as_ptr(), std::ptr::null_mut(), 0, ) };
 
         result > 0
     }
@@ -165,27 +198,8 @@ pub mod player_one
     {
         let cpuid_result: std::arch::x86_64::CpuidResult;
 
-        unsafe {
-            cpuid_result = std::arch::x86_64::__cpuid_count(1, 0);
-        }
+        unsafe { cpuid_result = std::arch::x86_64::__cpuid_count(1, 0); }
 
         cpuid_result.ecx & (1 << 31) != 0
-    }
-
-
-    /// Returns the optimal number of threads for concurrent operations on the current system.
-    ///
-    /// This function determines the number of logical processors available to the current
-    /// process, which is typically used as a sensible default for the number of threads
-    /// in a thread pool or for parallel computations.
-    ///
-    /// # Returns
-    ///
-    /// * `usize` - The number of logical processors available. This is usually equivalent
-    ///   to the number of CPU cores when hyper-threading is not in use, or twice the
-    ///   number of cores when hyper-threading is active.
-    pub fn get_optimal_thread_count() -> usize
-    {
-        thread::available_parallelism().map(|count| count.get()).unwrap_or(1)
     }
 }

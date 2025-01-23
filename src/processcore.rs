@@ -66,8 +66,8 @@ pub struct ProcessData
     is_protected: Result<bool, ProcessDataError>,
     is_secure: Result<bool, ProcessDataError>,
     pub(crate) thread_count: HashMap<String, usize>,
-    pub(crate) malicious_threads: Option<Vec<u32>>,
-    pub(crate) has_malicious_threads: bool,
+    //pub(crate) malicious_threads: Option<Vec<u32>>,
+    //pub(crate) has_malicious_threads: bool,
     pub(crate) is_32_bit: Result<bool, ProcessDataError>,
     pub(crate) window_title: Option<String>,
     pub(crate) window_stats: Option<WindowStats>,
@@ -90,8 +90,8 @@ impl ProcessData
             is_secure: Err(ProcessDataError::SecurityError("Not initialized".to_string())),
             is_elevated: Err(ProcessDataError::ElevationError("Not initialized".to_string())),
             thread_count: HashMap::new(),
-            malicious_threads: None,
-            has_malicious_threads: false,
+            //malicious_threads: None,
+            //: false,
             is_32_bit: Err(ProcessDataError::SecurityError("Not initialized".to_string())),
             window_title: None,
             window_stats: None,
@@ -150,18 +150,6 @@ impl ProcessData
         self.is_secure = process_info.is_secure_process()
             .map_err(|e| ProcessDataError::SecurityError(e.to_string()));
 
-        self.thread_count = process_info.query_thread_information();
-
-
-        match process_info.injected_thread() {
-            Ok((malicious_threads, has_malicious_threads)) => {
-                self.malicious_threads = Some(malicious_threads);
-                self.has_malicious_threads = has_malicious_threads;
-            }
-            Err(_) => {
-                //  noooooo
-            }
-        }
 
         self.is_32_bit = process_info.is_32_bit_process()
             .map_err(|e| ProcessDataError::Wow64Error(e.to_string()));
@@ -234,13 +222,6 @@ impl ProcessData
             if is_protected {
                 threat_score -= 1.0;
             }
-        }
-
-        if let Some(malicious_threads) = &self.malicious_threads {
-            for _ in malicious_threads {
-                threat_score += 0.5;
-            }
-            malicious_thread_pids.extend(malicious_threads.iter().cloned());
         }
 
         if let Some(hidden_thread_count) = self.thread_count.get("Hidden Flag") {

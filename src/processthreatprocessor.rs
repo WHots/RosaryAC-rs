@@ -32,7 +32,7 @@ pub struct ProcessThreatInfo
     image_path: Option<String>,
     is_debugged: Option<bool>,
     is_elevated: Option<bool>,
-    thread_count: Option<usize>,
+    //thread_count: Option<usize>,
     window_title: Option<String>,
     visible_windows: Option<u32>,
     invisible_windows: Option<u32>,
@@ -128,7 +128,7 @@ impl ProcessThreatInfo
             Err(_) => None,
         };
 
-        let thread_count = process_data.thread_count.values().next().cloned();
+        // let thread_count = process_data.thread_count.values().next().cloned();
         let (mut threat_score, malicious_threads) = process_data.base_score_process();
 
         let suspicious_imports = Self::process_bad_imports(pid, process_handle)
@@ -179,7 +179,7 @@ impl ProcessThreatInfo
             let has_zeroed_pe = is_pe_zero.unwrap_or(false);
             let high_write_count = write_count > 5.0; // Over 4MB written
             let many_suspicious_imports = suspicious_imports.len() >= 3; // 3 or more suspicious APIs
-            let has_anomalous_threads = process_data.thread_count.get("NOT Owned").map_or(false, |&count| count > 0) || process_data.thread_count.get("Hidden Flag").map_or(false, |&count| count > 0);
+            //let has_anomalous_threads = process_data.thread_count.get("NOT Owned").map_or(false, |&count| count > 0) || process_data.thread_count.get("Hidden Flag").map_or(false, |&count| count > 0);
 
             (high_threat && high_entropy) ||
                 // Architecture and privilege escalation risks
@@ -191,7 +191,7 @@ impl ProcessThreatInfo
                 // Suspicious activity patterns
                 (high_write_count && (many_suspicious_imports || high_entropy)) ||
                 // Thread manipulation
-                (has_anomalous_threads && (high_threat || many_suspicious_imports)) ||
+                //(has_anomalous_threads && (high_threat || many_suspicious_imports)) ||
                 // Multiple suspicious indicators
                 (many_suspicious_imports && high_entropy && is_elevated)
         };
@@ -213,7 +213,7 @@ impl ProcessThreatInfo
             image_path,
             is_debugged,
             is_elevated,
-            thread_count,
+            //thread_count,
             window_title: process_data.window_title,
             visible_windows,
             invisible_windows,
@@ -221,7 +221,7 @@ impl ProcessThreatInfo
             file_entropy,
             file_sha256,
             is_32_bit,
-            suspect_override: false,  // temporary value
+            suspect_override: false,
             write_count,
             suspicious_imports,
             privileges,
