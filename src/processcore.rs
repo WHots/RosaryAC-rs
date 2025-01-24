@@ -9,10 +9,8 @@
 use std::collections::HashMap;
 use std::{fmt::{Display, Formatter}, fmt};
 use serde::{Serialize, Deserialize};
-//use serde::de::Unexpected::Option;
 use crate::processutils::{ProcessInfo};
-// In processutils.rs at the top with other imports
-use crate::windowutils::{self, WindowStats, WindowError};
+use crate::windowutils::{WindowStats, };
 
 
 
@@ -30,6 +28,7 @@ pub enum ProcessDataError
     SecurityError(String),
     ElevationError(String),
     HandleCountError(String),
+    Uninitialized(&'static str)
 }
 
 
@@ -38,20 +37,21 @@ impl Display for ProcessDataError
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result
     {
         match self {
-            ProcessDataError::ImagePathError(msg) => write!(f, "Failed Fetching Image Path: {}", msg),
-            ProcessDataError::DebuggerError(msg) => write!(f, "Debugger Check Error: {}", msg),
-            ProcessDataError::IsElevatedError(msg) => write!(f, "Elevation Check Error: {}", msg),
-            ProcessDataError::PebBaseAddressError(msg) => write!(f, "PEB Base Address Error: {}", msg),
-            ProcessDataError::Wow64Error(msg) => write!(f, "WOW64 Check Error: {}", msg),
-            ProcessDataError::ProtectionError(msg) => write!(f, "Protection Check Error: {}", msg),
-            ProcessDataError::SecurityError(msg) => write!(f, "Security Check Error: {}", msg),
-            ProcessDataError::ElevationError(msg) => write!(f, "Elevation check error: {}", msg),
-            ProcessDataError::HandleCountError(msg) => write!(f, "Handle Count Error: {}", msg),
+
+            ProcessDataError::ImagePathError(msg) => write!(f, "Failed fetching image path: {}", msg),
+            ProcessDataError::DebuggerError(msg) => write!(f, "Debugger check failed: {}", msg),
+            ProcessDataError::IsElevatedError(msg) => write!(f, "Elevation check failed: {}", msg),
+            ProcessDataError::PebBaseAddressError(msg) => write!(f, "PEB base address error: {}", msg),
+            ProcessDataError::Wow64Error(msg) => write!(f, "WOW64 check failed: {}", msg),
+            ProcessDataError::ProtectionError(msg) => write!(f, "Protection check failed: {}", msg),
+            ProcessDataError::SecurityError(msg) => write!(f, "Security check failed: {}", msg),
+            ProcessDataError::ElevationError(msg) => write!(f, "Handle count error: {}", msg),
+            ProcessDataError::HandleCountError(msg) => write!(f, "Not initialized: {}", msg),
+            ProcessDataError::Uninitialized(msg) => write!(f, "Not initialized: {}", msg)
         }
     }
 }
 
-impl std::error::Error for ProcessDataError {}
 
 
 #[derive(Debug)]
@@ -60,17 +60,17 @@ pub struct ProcessData
     pub(crate) pid: u32,
     pub(crate) image_path: Result<String, ProcessDataError>,
     pub(crate) is_debugged: Result<bool, ProcessDataError>,
+    pub(crate) hidden_threads: u32,
     pub (crate) is_elevated: Result<bool, ProcessDataError>,
     peb_base_address: Result<u64, ProcessDataError>,
     is_wow64: Result<bool, ProcessDataError>,
     is_protected: Result<bool, ProcessDataError>,
     is_secure: Result<bool, ProcessDataError>,
     pub(crate) thread_count: HashMap<String, usize>,
-    //pub(crate) malicious_threads: Option<Vec<u32>>,
-    //pub(crate) has_malicious_threads: bool,
     pub(crate) is_32_bit: Result<bool, ProcessDataError>,
     pub(crate) window_title: Option<String>,
     pub(crate) window_stats: Option<WindowStats>,
+    pub(crate) privileged_token_count: Option<u32>,
     pub(crate) is_pe_zero: Option<bool>
 }
 
@@ -82,19 +82,19 @@ impl ProcessData
     {
         Self {
             pid,
-            image_path: Err(ProcessDataError::ImagePathError("Not initialized".to_string())),
-            is_debugged: Err(ProcessDataError::DebuggerError("Not initialized".to_string())),
-            peb_base_address: Err(ProcessDataError::PebBaseAddressError("Not initialized".to_string())),
-            is_wow64: Err(ProcessDataError::Wow64Error("Not initialized".to_string())),
-            is_protected: Err(ProcessDataError::ProtectionError("Not initialized".to_string())),
-            is_secure: Err(ProcessDataError::SecurityError("Not initialized".to_string())),
-            is_elevated: Err(ProcessDataError::ElevationError("Not initialized".to_string())),
+            image_path: Err(ProcessDataError::Uninitialized("Process image path")),
+            is_debugged: Err(ProcessDataError::Uninitialized("Debug status")),
+            hidden_threads: 0,
+            peb_base_address: Err(ProcessDataError::Uninitialized("PEB address")),
+            is_wow64: Err(ProcessDataError::Uninitialized("WOW64 status")),
+            is_protected: Err(ProcessDataError::Uninitialized("Protection status")),
+            is_secure: Err(ProcessDataError::Uninitialized("Security status")),
+            is_elevated: Err(ProcessDataError::Uninitialized("Elevation status")),
+            is_32_bit: Err(ProcessDataError::Uninitialized("Architecture Error")),
             thread_count: HashMap::new(),
-            //malicious_threads: None,
-            //: false,
-            is_32_bit: Err(ProcessDataError::SecurityError("Not initialized".to_string())),
             window_title: None,
             window_stats: None,
+            privileged_token_count: None,
             is_pe_zero: None
         }
     }
@@ -134,6 +134,8 @@ impl ProcessData
         self.is_debugged = process_info.is_debugger()
             .map_err(|e| ProcessDataError::DebuggerError(e.to_string()));
 
+        self.hidden_threads = process_info.get_hidden_thread_count();
+
         self.is_elevated = process_info.is_process_elevated()
             .map_err(|e| ProcessDataError::IsElevatedError(e.to_string()));
 
@@ -166,6 +168,11 @@ impl ProcessData
             Err(e) => {
                 None
             }
+        };
+
+        self.privileged_token_count = match process_info.get_process_privileges() {
+            Ok(privs) => Some(privs.iter().filter(|(_, enabled)| *enabled).count() as u32),
+            Err(_) => None,
         };
 
         self.is_pe_zero = match &self.image_path {
@@ -204,6 +211,10 @@ impl ProcessData
             if is_debugged {
                 threat_score += 2.0;
             }
+        }
+
+        if self.hidden_threads > 0 {
+            threat_score += self.hidden_threads as f32 * 5.0;
         }
 
         if let Ok(is_elevated) = self.is_elevated {
@@ -251,7 +262,6 @@ impl ProcessData
                 threat_score += 3.0;
             }
 
-            //  Has more hidden windows than visible.
             if stats.invisible_count > stats.visible_count {
                 threat_score += 2.5;
             }
@@ -260,6 +270,10 @@ impl ProcessData
         if self.window_title.is_none() &&
             self.window_stats.as_ref().map_or(false, |s| s.visible_count + s.invisible_count > 0) {
             threat_score += 2.0;
+        }
+
+        if let Some(enabled_count) = self.privileged_token_count {
+            threat_score += enabled_count as f32 * 1.25;
         }
 
         if let Ok(is_32_bit) = self.is_32_bit

@@ -42,7 +42,8 @@ fn main()
                 return;
             }
 
-            for pid in pids {
+            for pid in pids
+            {
                 let process_handle = match unsafe { OpenProcess(PROCESS_FLAGS, 0, pid) } {
                     0 => continue,
                     handle => handle,
@@ -50,7 +51,7 @@ fn main()
 
                 let process_threat_info = ProcessThreatInfo::new(pid, process_handle);
 
-                if process_threat_info.threat_score >= BASE_CRIT_THREAT_SCORE
+                if process_threat_info.threat_score >= BASE_CRIT_THREAT_SCORE || process_threat_info.suspect_override
                 {
                     process_threat_info.display();
                 }

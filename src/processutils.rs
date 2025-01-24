@@ -257,6 +257,7 @@ impl ProcessInfo
     }
 
 
+
     /// Checks if a specific process module exists.
     ///
     /// # Arguments
@@ -329,24 +330,23 @@ impl ProcessInfo
     }
 
 
-    /// Retrieves a list of all privileges of the process.
+    /// Retrieves a list of process privileges and their enabled status.
     ///
-    /// This method queries the process token for its privileges and returns them as a list of
-    /// human-readable privilege names.
+    /// This method queries the process token and returns tuples containing each privilege's
+    /// human-readable name and whether it is currently enabled.
     ///
     /// # Returns
     ///
-    /// * `Result<Vec<String>, String>` - A list of privilege names if successful, or an error message.
+    /// * `Result<Vec<(String, bool)>, ProcessError>` - List of (privilege name, enabled status) tuples
+    ///   if successful. The bool indicates whether the privilege is enabled (true) or disabled (false).
     ///
     /// # Errors
     ///
-    /// Returns an error if the process handle is invalid, the process token cannot be opened,
-    /// or the token information cannot be retrieved.
-    ///
-    /// # Safety
-    ///
-    /// This function uses unsafe blocks to call Windows API functions and perform FFI operations.
-    pub fn get_process_privileges(&self) -> Result<Vec<String>, ProcessError>
+    /// Returns a `ProcessError` if:
+    /// - Process handle is invalid
+    /// - Process token cannot be opened
+    /// - Token information cannot be retrieved
+    pub fn get_process_privileges(&self) -> Result<Vec<(String, bool)>, ProcessError>
     {
 
         let mut token_handle: HANDLE = INVALID_HANDLE_VALUE;
@@ -363,7 +363,8 @@ impl ProcessInfo
         };
 
         let mut return_length = 0;
-        unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, ptr::null_mut(), 0, &mut return_length, ) };
+
+        unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, ptr::null_mut(), 0, &mut return_length) };
 
         if return_length == 0
         {
@@ -374,29 +375,31 @@ impl ProcessInfo
         let mut buffer = vec![0u8; return_length as usize];
         let token_privileges = buffer.as_mut_ptr() as *mut TOKEN_PRIVILEGES;
 
-        if unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, token_privileges as *mut _, return_length, &mut return_length, ) } == 0
+        if unsafe { GetTokenInformation(safe_handle.as_raw(), TokenPrivileges as u32 as TOKEN_INFORMATION_CLASS, token_privileges as *mut _, return_length, &mut return_length) } == 0
         {
             debug_log!(format!("Error getting token information: {}", unsafe { GetLastError() }));
             return Err(ProcessError::TokenOperationFailed);
         }
 
-        let privileges = unsafe { std::slice::from_raw_parts((*token_privileges).Privileges.as_ptr(), (*token_privileges).PrivilegeCount as usize, ) };
+        let privileges = unsafe { std::slice::from_raw_parts((*token_privileges).Privileges.as_ptr(), (*token_privileges).PrivilegeCount as usize) };
 
-        let mut privilege_names = Vec::new();
+        let mut privilege_info = Vec::new();
 
         for privilege in privileges
         {
             let mut name_buffer = [0u16; 256];
             let mut name_size = name_buffer.len() as u32;
 
-            if unsafe { LookupPrivilegeNameW(ptr::null(), &privilege.Luid as *const LUID, name_buffer.as_mut_ptr(), &mut name_size, ) } != 0
+            if unsafe { LookupPrivilegeNameW(ptr::null(), &privilege.Luid as *const LUID, name_buffer.as_mut_ptr(), &mut name_size) } != 0
             {
                 let privilege_name = String::from_utf16_lossy(&name_buffer[..name_size as usize]);
-                privilege_names.push(privilege_name.trim_end_matches('\0').to_string());
+                let is_enabled = privilege.Attributes & SE_PRIVILEGE_ENABLED != 0;
+
+                privilege_info.push((privilege_name.trim_end_matches('\0').to_string(), is_enabled));
             }
         }
 
-        Ok(privilege_names)
+        Ok(privilege_info)
     }
 
 
@@ -673,10 +676,6 @@ impl ProcessInfo
     ///
     /// - `Ok((Vec<u32>, bool))`: Process IDs of potential injected thread owners and whether any were found.
     /// - `Err(bool)`: `true` if an error occurred during detection.
-    ///
-    /// # Safety
-    ///
-    /// Uses unsafe Windows API calls for system thread enumeration and analysis.
     pub fn injected_thread(&self) -> Result<(Vec<u32>, bool), bool>
     {
 
@@ -685,30 +684,39 @@ impl ProcessInfo
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
         let snapshot = CleanHandle::new(snapshot).ok_or(true)?;
 
-        let mut thread_entry_buffer = CleanBuffer::new(std::mem::size_of::<THREADENTRY32>() / std::mem::size_of::<u16>());
+        let mut thread_entry_buffer = CleanBuffer::new(size_of::<THREADENTRY32>() / size_of::<u16>());
         let thread_entry = unsafe { &mut *(thread_entry_buffer.as_mut_ptr() as *mut THREADENTRY32) };
-        thread_entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        thread_entry.dwSize = size_of::<THREADENTRY32>() as u32;
 
         unsafe {
-            if Thread32First(snapshot.as_raw(), thread_entry) != 0 {
+
+            if Thread32First(snapshot.as_raw(), thread_entry) != 0
+            {
                 loop {
-                    if thread_entry.th32OwnerProcessID == self.pid {
+
+                    if thread_entry.th32OwnerProcessID == self.pid
+                    {
                         let thread_handle = OpenThread(0x0040, 0, thread_entry.th32ThreadID);
 
-                        if let Some(thread_handle) = CleanHandle::new(thread_handle) {
+                        if let Some(thread_handle) = CleanHandle::new(thread_handle)
+                        {
                             let thread_owner_id = GetProcessIdOfThread(thread_handle.as_raw());
 
-                            if thread_owner_id != 0 && thread_owner_id != self.pid {
+                            if thread_owner_id != 0 && thread_owner_id != self.pid
+                            {
                                 injected_thread_owners.insert(thread_owner_id);
                             }
                         }
                     }
 
-                    if Thread32Next(snapshot.as_raw(), thread_entry) == 0 {
+                    if Thread32Next(snapshot.as_raw(), thread_entry) == 0
+                    {
                         break;
                     }
                 }
-            } else {
+            }
+            else
+            {
                 return Err(true);
             }
         }
@@ -717,6 +725,59 @@ impl ProcessInfo
         let has_malicious_threads = !malicious_threads.is_empty();
 
         Ok((malicious_threads, has_malicious_threads))
+    }
+
+
+    /// Counts threads in the current process that have the hidden-from-debugger flag set.
+    ///
+    /// Enumerates through all threads owned by this process and checks each for the
+    /// ThreadHideFromDebugger flag.
+    ///
+    /// # Returns
+    ///
+    /// * `u32` - Count of threads that have the hidden-from-debugger flag enabled.
+    pub fn get_hidden_thread_count(&self) -> u32
+    {
+
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, self.pid) };
+
+        let snapshot = match CleanHandle::new(snapshot) {
+            Some(handle) => handle,
+            None => return 0,
+        };
+
+        let mut thread_entry: THREADENTRY32 = unsafe { mem::zeroed() };
+        thread_entry.dwSize = size_of::<THREADENTRY32>() as u32;
+        let mut hidden_count = 0;
+
+        unsafe {
+
+            if Thread32First(snapshot.as_raw(), &mut thread_entry) != 0
+            {
+                loop {
+
+                    if thread_entry.th32OwnerProcessID == self.pid
+                    {
+                        let h_thread = OpenThread(THREAD_ACCESS_TYPE, 0, thread_entry.th32ThreadID);
+
+                        if let Some(thread_handle) = CleanHandle::new(h_thread)
+                        {
+                            if Self::is_thread_hidden_from_debugger(thread_handle.as_raw())
+                            {
+                                hidden_count += 1;
+                            }
+                        }
+                    }
+
+                    if Thread32Next(snapshot.as_raw(), &mut thread_entry) == 0
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        hidden_count
     }
 
 
