@@ -41,7 +41,7 @@ pub fn read_c_string(process_handle: HANDLE, address: *const u8) -> Result<Strin
 
         let byte: u8 = match read_memory(process_handle, unsafe { address.add(offset) }) {
             Ok(b) => b,
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.to_string()),
         };
 
         if byte == 0

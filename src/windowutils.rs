@@ -6,6 +6,8 @@
 
 
 
+use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, BOOL, GetLastError};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -19,38 +21,52 @@ use windows_sys::Win32::Graphics::Gdi::{
 
 use crate::debug_log;
 
+
+
 /// Structure to hold window visibility statistics
 #[derive(Debug)]
-pub struct WindowStats {
+pub struct WindowStats
+{
     pub visible_count: u32,
     pub invisible_count: u32,
 }
 
 
+
+/// Various errors that can occur during window operations.
 #[derive(Debug)]
 pub enum WindowError
 {
-    EnumWindowsFail,
-    NoDC,
-    NoCompatDC,
-    NoBitmap,
-    CaptureFailure,
+    /// Failed to enumerate windows using EnumWindows API.
+    EnumWindowsFailed,
+    /// Failed to get device context for window.
+    DeviceContextFailed,
+    /// Failed to create compatible device context.
+    CompatDeviceContextFailed,
+    /// Failed to create bitmap for window capture.
+    BitmapFailed,
+    /// Failed to capture window contents.
+    CaptureFailed,
+    /// No visible window was found for the process.
     NoVisibleWindow,
+    /// Other errors.
+    Other(i32),
 }
 
-
-impl std::fmt::Display for WindowError
+impl Display for WindowError
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result
     {
-        match self {
-            WindowError::EnumWindowsFail => write!(f, "Failed to enumerate windows"),
-            WindowError::NoDC => write!(f, "Failed to get window DC"),
-            WindowError::NoCompatDC => write!(f, "Failed to create compatible DC"),
-            WindowError::NoBitmap => write!(f, "Failed to create bitmap"),
-            WindowError::CaptureFailure => write!(f, "Failed to capture window contents"),
-            WindowError::NoVisibleWindow => write!(f, "No visible window found"),
-        }
+        let msg = match self {
+            WindowError::EnumWindowsFailed => "Failed to enumerate windows",
+            WindowError::DeviceContextFailed => "Failed to get window device context",
+            WindowError::CompatDeviceContextFailed => "Failed to create compatible device context",
+            WindowError::BitmapFailed => "Failed to create window bitmap",
+            WindowError::CaptureFailed => "Failed to capture window contents",
+            WindowError::NoVisibleWindow => "No visible window found for process",
+            WindowError::Other(code) => return write!(f, "Unknown error: {}", code),
+        };
+        write!(f, "{}", msg)
     }
 }
 
@@ -105,8 +121,9 @@ pub fn get_window_title(pid: u32) -> Result<Option<String>, WindowError>
 
     if result == 0 && state.window_title.is_none()
     {
-        debug_log!(format!("Error enumerating windows: {}", unsafe { GetLastError() }));
-        return Err(WindowError::EnumWindowsFail);
+        let e = WindowError::EnumWindowsFailed;
+        debug_log!(e);
+        return Err(e)
     }
 
     Ok(state.window_title)
@@ -160,8 +177,9 @@ pub fn get_window_stats(pid: u32) -> Result<WindowStats, WindowError>
 
     if result == 0
     {
-        debug_log!(format!("Error enumerating windows: {}", unsafe { GetLastError() }));
-        return Err(WindowError::EnumWindowsFail);
+        let e = WindowError::EnumWindowsFailed;
+        debug_log!(e);
+        return Err(e)
     }
 
     Ok(WindowStats {

@@ -8,45 +8,39 @@
 
 
 #[macro_export]
-macro_rules! debug_log {
-   ($error_code:expr) => {
+macro_rules! debug_log
+{
+   ($error:expr) => {
        #[cfg(debug_assertions)]
        {
            use std::fs::OpenOptions;
            use std::io::Write;
            use std::time::SystemTime;
+           use windows_sys::Win32::Foundation::GetLastError;
 
-           let log_file = OpenOptions::new().create(true).append(true).open("log.txt");
+           if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("debug.log") {
+               let time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap();
+               let secs = time.as_secs();
+               let millis = time.subsec_millis();
 
-           match log_file {
+               let year = 1970 + (secs / 31557600);
+               let remaining_secs = secs % 31557600;
+               let month = remaining_secs / 2629800;
+               let day = (remaining_secs % 2629800) / 86400;
+               let hour = (remaining_secs % 86400) / 3600;
+               let min = (remaining_secs % 3600) / 60;
+               let sec = remaining_secs % 60;
 
-               Ok(mut file) => {
-                   let time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap();
-                   
-                   let secs = time.as_secs();
-                   let millis = time.subsec_millis();
-
-                   let year = 1970 + (secs / 31557600); // Seconds per year
-                   let remaining_secs = secs % 31557600;
-                   let month = remaining_secs / 2629800; // Seconds per month (approx)
-                   let day = (remaining_secs % 2629800) / 86400; // Seconds per day
-                   let hour = (remaining_secs % 86400) / 3600;
-                   let min = (remaining_secs % 3600) / 60;
-                   let sec = remaining_secs % 60;
-
-                   let log_entry = format!(
-                       "[{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}] Error {}: at {}:{}\n",
-                       year, month+1, day+1, hour, min, sec, millis,
-                       $error_code,
-                       file!(),
-                       line!()
-                   );
-
-                   if let Err(e) = file.write_all(log_entry.as_bytes()) {
-                       eprintln!("Failed to write to log file: {}", e);
-                   }
-               },
-               Err(e) => eprintln!("Failed to open log file: {}", e)
+               let win_error = unsafe { GetLastError() };
+               let log_entry = format!(
+                   "[{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}] {} : GetLastError Code = {} : Near {}:{}\n",
+                   year, month+1, day+1, hour, min, sec, millis,
+                   $error,
+                   win_error,
+                   file!(),
+                   line!()
+               );
+               let _ = file.write_all(log_entry.as_bytes());
            }
        }
    };

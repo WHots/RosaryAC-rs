@@ -10,6 +10,7 @@ use std::mem;
 use std::slice;
 use std::fmt;
 use std::ffi::c_void;
+use std::fmt::{Display, Formatter};
 use windows_sys::Win32::Foundation::{BOOL, GetLastError, HANDLE};
 use windows_sys::Win32::System::Diagnostics::Debug::{IMAGE_NT_HEADERS64, IMAGE_SECTION_HEADER, ReadProcessMemory};
 use windows_sys::Win32::System::WindowsProgramming::IMAGE_THUNK_DATA64;
@@ -30,7 +31,8 @@ const IMAGE_DIRECTORY_ENTRY_IMPORT: usize = 1;
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct SectionInfo {
+pub struct SectionInfo
+{
     pub name: String,
     pub virtual_address: u32,
     pub size_of_raw_data: u32,
@@ -38,7 +40,8 @@ pub struct SectionInfo {
 
 
 /// Result of iterating through the Import Address Table (IAT).
-pub enum IATResult {
+pub enum IATResult
+{
     /// The function was found in the IAT.
     Found,
     /// The function was not found in the IAT.
@@ -49,7 +52,9 @@ pub enum IATResult {
 
 
 /// Various errors that can occur while processing PE (Portable Executable) files.
-pub enum PEError {
+#[derive(Debug)]
+pub enum PEError
+{
     /// Failed to read memory from the process.
     ReadMemoryFailed,
     /// The DOS signature is invalid.
@@ -62,24 +67,28 @@ pub enum PEError {
     FailedExecution,
     /// The section name is invalid.
     InvalidSectionName,
-    /// Other errors represented by an integer code.
-    Other(i32),
+    /// The size of section is 0.
+    PESectionsZero,
+    /// Process or operation not initialized.
+    Uninitialized,
 }
 
 
-
-impl fmt::Display for PEError 
+impl Display for PEError
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PEError::ReadMemoryFailed => write!(f, "Failed to read memory"),
-            PEError::InvalidDosSignature => write!(f, "Invalid DOS signature"),
-            PEError::InvalidNtSignature => write!(f, "Invalid NT signature"),
-            PEError::NoImportDirectory => write!(f, "No import directory found"),
-            PEError::FailedExecution => write!(f, "Failed execution"),
-            PEError::InvalidSectionName => write!(f, "Invalid section name"),
-            PEError::Other(code) => write!(f, "Unknown error: {}", code),
-        }
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result
+    {
+        let msg = match self {
+            PEError::ReadMemoryFailed => "Failed to read memory",
+            PEError::InvalidDosSignature => "Invalid DOS signature",
+            PEError::InvalidNtSignature => "Invalid NT signature",
+            PEError::NoImportDirectory => "No import directory found",
+            PEError::FailedExecution => "Failed execution",
+            PEError::InvalidSectionName => "Invalid section name",
+            PEError::PESectionsZero => "No valid PE sections found",
+            PEError::Uninitialized => "Not initialized",
+        };
+        f.write_str(msg)
     }
 }
 
@@ -303,11 +312,6 @@ pub unsafe fn display_section_info(section_name: &str, process_handle: HANDLE, b
 pub fn is_pe_zeroed(process_handle: HANDLE, base: *const u8) -> Result<bool, PEError>
 {
 
-    if process_handle == 0 || base.is_null()
-    {
-        return Err(PEError::Other(1));
-    }
-
     const MAX_PE_SIZE: usize = 2 * 1024 * 1024;
     const MIN_PE_SIZE: usize = 0x1000;
     const PE_ZEROED_PERCENTAGE: f64 = 0.85;
@@ -370,7 +374,9 @@ pub fn is_pe_zeroed(process_handle: HANDLE, base: *const u8) -> Result<bool, PEE
     }
     else
     {
-        Err(PEError::Other(6))
+        let e = PEError::PESectionsZero;
+        debug_log!(e);
+        Err(e)
     }
 }
 
@@ -388,41 +394,30 @@ pub fn is_pe_zeroed(process_handle: HANDLE, base: *const u8) -> Result<bool, PEE
 pub fn get_pe_sections(process_handle: HANDLE, base: *const u8) -> Result<Vec<String>, PEError>
 {
 
-    if process_handle == 0 || base.is_null()
-    {
-        return Err(PEError::Other(1));
-    }
+    const MAX_PE_SIZE: usize = 2 * 1024 * 1024; // 2MB
 
-    const MAX_PE_SIZE: usize = 2 * 1024 * 1024; // 2MB max size for sanity check
-
-    let dos_header: IMAGE_DOS_HEADER = read_memory(process_handle, base)
-        .map_err(|_| PEError::ReadMemoryFailed)?;
+    let dos_header: IMAGE_DOS_HEADER = read_memory(process_handle, base).map_err(|_| PEError::ReadMemoryFailed)?;
 
     if dos_header.e_magic != IMAGE_DOS_SIGNATURE || dos_header.e_lfanew <= 0 || (dos_header.e_lfanew as usize) > MAX_PE_SIZE
     {
-        debug_log!(format!("Error invalid dos signature: {}", unsafe {GetLastError()}));
+        debug_log!(PEError::InvalidDosSignature);
         return Err(PEError::InvalidDosSignature);
     }
 
-    let nt_headers: IMAGE_NT_HEADERS64 = read_memory(
-        process_handle,
-        unsafe { base.add(dos_header.e_lfanew as usize) }
-    ).map_err(|_| PEError::ReadMemoryFailed)?;
+    let nt_headers: IMAGE_NT_HEADERS64 = read_memory(process_handle, unsafe { base.add(dos_header.e_lfanew as usize) }).map_err(|_| PEError::ReadMemoryFailed)?;
 
-    if nt_headers.Signature != IMAGE_NT_SIGNATURE || nt_headers.FileHeader.NumberOfSections == 0 || nt_headers.FileHeader.NumberOfSections > 96  // Sanity check for max sections
+    if nt_headers.Signature != IMAGE_NT_SIGNATURE || nt_headers.FileHeader.NumberOfSections == 0 || nt_headers.FileHeader.NumberOfSections > 96
     {
-        debug_log!(format!("Error invalid NT signature: {}", unsafe {GetLastError()}));
+        debug_log!(PEError::InvalidNtSignature);
         return Err(PEError::InvalidNtSignature);
     }
 
-    let section_headers_address = unsafe {
-        base.add(dos_header.e_lfanew as usize)
-            .add(mem::size_of::<IMAGE_NT_HEADERS64>())
-    };
+    let section_headers_address = unsafe { base.add(dos_header.e_lfanew as usize).add(mem::size_of::<IMAGE_NT_HEADERS64>()) };
 
     let mut section_names = Vec::with_capacity(nt_headers.FileHeader.NumberOfSections as usize);
 
-    for i in 0..nt_headers.FileHeader.NumberOfSections {
+    for i in 0..nt_headers.FileHeader.NumberOfSections
+    {
         let section_header: IMAGE_SECTION_HEADER = read_memory(
             process_handle,
             unsafe {
@@ -431,14 +426,13 @@ pub fn get_pe_sections(process_handle: HANDLE, base: *const u8) -> Result<Vec<St
         ).map_err(|_| PEError::ReadMemoryFailed)?;
 
         let name_bytes = unsafe { slice::from_raw_parts(section_header.Name.as_ptr(), 8) };
-        let name_end = name_bytes.iter()
-            .position(|&c| c == 0)
-            .unwrap_or(8);
+        let name_end = name_bytes.iter().position(|&c| c == 0).unwrap_or(8);
 
         let section_name = match std::str::from_utf8(&name_bytes[..name_end]) {
             Ok(name) => {
 
                 let name = name.trim();
+
                 if name.is_empty()
                 {
                     "null".to_string()
